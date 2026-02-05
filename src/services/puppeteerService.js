@@ -50,12 +50,18 @@ export const captureScreenshot = async (url, outputPath, options = {}) => {
       timeout: 60000
     });
 
+    // Run beforeCapture callback if provided (for ad detection/replacement)
+    let callbackResult = null;
+    if (options.beforeCapture && typeof options.beforeCapture === 'function') {
+      callbackResult = await options.beforeCapture(page);
+    }
+
     await page.screenshot({
       path: outputPath,
       fullPage: false
     });
 
-    return { success: true, path: outputPath };
+    return { success: true, path: outputPath, callbackResult };
   } finally {
     await page.close();
   }

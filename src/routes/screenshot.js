@@ -3,6 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs/promises';
 import { captureScreenshot } from '../services/puppeteerService.js';
+import { detectIframeAds } from '../services/adDetection.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -65,14 +66,30 @@ router.post('/', async (req, res) => {
 
     console.log(`Capturing screenshot of: ${url}`);
 
-    await captureScreenshot(url, outputPath);
+    // Ad detection callback
+    let detectedAds = [];
+    const beforeCapture = async (page) => {
+      detectedAds = await detectIframeAds(page);
+      if (detectedAds.length > 0) {
+        console.log(`Detected ${detectedAds.length} ad placement(s):`);
+        detectedAds.forEach((ad, index) => {
+          console.log(`  ${index + 1}. ${ad.sizeString} (${ad.iabSize || 'non-standard'}) - ${ad.type}`);
+        });
+      } else {
+        console.log('No ad placements detected');
+      }
+      return detectedAds;
+    };
+
+    const result = await captureScreenshot(url, outputPath, { beforeCapture });
 
     console.log(`Screenshot saved: ${filename}`);
 
     res.json({
       success: true,
       filename,
-      message: 'Screenshot captured successfully'
+      message: 'Screenshot captured successfully',
+      detectedAds: result.callbackResult || []
     });
   } catch (error) {
     console.error(`Screenshot capture failed for ${url}:`, error.message);
