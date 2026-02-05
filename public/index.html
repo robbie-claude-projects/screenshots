@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ad Placement Visualization Tool</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Ad Placement Visualization Tool</h1>
+      <p class="subtitle">Create mockup screenshots with your ads placed on any website</p>
+    </header>
+
+    <main>
+      <form id="screenshot-form">
+        <section class="form-section">
+          <h2>Target URLs</h2>
+          <p class="help-text">Enter the website URLs where you want to place ads (one per line)</p>
+          <textarea
+            id="urls"
+            name="urls"
+            rows="4"
+            placeholder="https://example.com&#10;https://another-site.com"
+            required
+          ></textarea>
+        </section>
+
+        <section class="form-section">
+          <h2>Ad Creatives</h2>
+          <p class="help-text">Enter URLs to your ad creative images</p>
+
+          <div class="ad-input-group">
+            <label for="ad-creative-1">Ad Creative URL</label>
+            <div class="input-row">
+              <input
+                type="url"
+                id="ad-creative-1"
+                name="adCreatives[]"
+                placeholder="https://example.com/ad-image.jpg"
+              >
+              <select name="adSizes[]" class="size-select">
+                <option value="300x250">300x250 (Medium Rectangle)</option>
+                <option value="728x90">728x90 (Leaderboard)</option>
+                <option value="300x600">300x600 (Half Page)</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="ad-input-group">
+            <label for="ad-creative-2">Ad Creative URL (Optional)</label>
+            <div class="input-row">
+              <input
+                type="url"
+                id="ad-creative-2"
+                name="adCreatives[]"
+                placeholder="https://example.com/ad-image-2.jpg"
+              >
+              <select name="adSizes[]" class="size-select">
+                <option value="300x250">300x250 (Medium Rectangle)</option>
+                <option value="728x90">728x90 (Leaderboard)</option>
+                <option value="300x600">300x600 (Half Page)</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="ad-input-group">
+            <label for="ad-creative-3">Ad Creative URL (Optional)</label>
+            <div class="input-row">
+              <input
+                type="url"
+                id="ad-creative-3"
+                name="adCreatives[]"
+                placeholder="https://example.com/ad-image-3.jpg"
+              >
+              <select name="adSizes[]" class="size-select">
+                <option value="300x250">300x250 (Medium Rectangle)</option>
+                <option value="728x90">728x90 (Leaderboard)</option>
+                <option value="300x600">300x600 (Half Page)</option>
+              </select>
+            </div>
+          </div>
+        </section>
+
+        <section class="form-section">
+          <button type="submit" class="submit-btn">
+            Generate Screenshots
+          </button>
+        </section>
+      </form>
+
+      <section id="results" class="results-section hidden">
+        <h2>Results</h2>
+        <div id="results-content"></div>
+      </section>
+    </main>
+
+    <footer>
+      <p>Ad Placement Visualization Tool</p>
+    </footer>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>
