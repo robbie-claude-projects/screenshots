@@ -1,0 +1,27 @@
+{
+  "name": "ad-placement-tool",
+  "version": "1.0.0",
+  "description": "Ad Placement Visualization Tool - Automates creation of mockup screenshots showing client ads placed on specified websites",
+  "main": "src/server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js"
+  },
+  "keywords": [
+    "ad-placement",
+    "screenshot",
+    "puppeteer",
+    "advertising",
+    "mockup"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "express": "^4.18.2",
+    "puppeteer": "^21.6.1"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0"
+  }
+}
