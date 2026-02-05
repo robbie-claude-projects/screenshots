@@ -3,7 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs/promises';
 import { captureScreenshot } from '../services/puppeteerService.js';
-import { detectIframeAds } from '../services/adDetection.js';
+import { detectAds } from '../services/adDetection.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -66,12 +66,14 @@ router.post('/', async (req, res) => {
 
     console.log(`Capturing screenshot of: ${url}`);
 
-    // Ad detection callback
+    // Ad detection callback (uses both iframe and CSS methods)
     let detectedAds = [];
     const beforeCapture = async (page) => {
-      detectedAds = await detectIframeAds(page);
+      detectedAds = await detectAds(page);
       if (detectedAds.length > 0) {
-        console.log(`Detected ${detectedAds.length} ad placement(s):`);
+        const iframeCount = detectedAds.filter(ad => ad.type === 'iframe').length;
+        const cssCount = detectedAds.filter(ad => ad.type === 'css').length;
+        console.log(`Detected ${detectedAds.length} ad placement(s): ${iframeCount} iframe, ${cssCount} CSS`);
         detectedAds.forEach((ad, index) => {
           console.log(`  ${index + 1}. ${ad.sizeString} (${ad.iabSize || 'non-standard'}) - ${ad.type}`);
         });
