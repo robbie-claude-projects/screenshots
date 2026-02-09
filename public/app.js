@@ -6,15 +6,28 @@ document.addEventListener('DOMContentLoaded', () => {
   const resultsContent = document.getElementById('results-content');
   const submitBtn = form.querySelector('.submit-btn');
 
-  // Show loading state
-  const showLoading = () => {
+  // Show loading state for single URL
+  const showLoading = (message = 'Capturing screenshot and detecting ads...') => {
     submitBtn.disabled = true;
     submitBtn.textContent = 'Processing...';
     resultsSection.classList.remove('hidden');
     resultsContent.innerHTML = `
       <div class="loading">
         <div class="spinner"></div>
-        <p>Capturing screenshot and detecting ads...</p>
+        <p>${message}</p>
+      </div>
+    `;
+  };
+
+  // Show batch progress
+  const showBatchProgress = (current, total) => {
+    resultsContent.innerHTML = `
+      <div class="loading">
+        <div class="spinner"></div>
+        <p>Processing ${current} of ${total} URLs...</p>
+        <div class="progress-bar">
+          <div class="progress-fill" style="width: ${(current / total) * 100}%"></div>
+        </div>
       </div>
     `;
   };
@@ -36,7 +49,7 @@ document.addEventListener('DOMContentLoaded', () => {
     `;
   };
 
-  // Show success message with screenshot
+  // Show success message with single screenshot
   const showSuccess = (data) => {
     let html = `
       <div class="success-message">
@@ -81,9 +94,68 @@ document.addEventListener('DOMContentLoaded', () => {
     resultsContent.innerHTML = html;
   };
 
+  // Show batch results
+  const showBatchResults = (data) => {
+    let html = `
+      <div class="success-message">
+        <h3>Batch Processing Complete</h3>
+        <div class="batch-summary">
+          <p><strong>Job ID:</strong> ${data.jobId}</p>
+          <p><strong>Total URLs:</strong> ${data.totalUrls}</p>
+          <p><strong>Successful:</strong> ${data.successful}</p>
+          <p><strong>Failed:</strong> ${data.failed}</p>
+        </div>
+        <div class="batch-results">
+          <h4>Results</h4>
+          <div class="results-list">
+    `;
+
+    data.results.forEach((result, index) => {
+      if (result.success) {
+        html += `
+          <div class="result-item success">
+            <div class="result-header">
+              <span class="result-number">${index + 1}</span>
+              <span class="result-status">Success</span>
+            </div>
+            <p class="result-url">${result.url}</p>
+            <div class="result-preview">
+              <a href="/screenshots/${result.filename}" target="_blank">
+                <img src="/screenshots/${result.filename}" alt="Screenshot ${index + 1}" class="batch-preview">
+              </a>
+            </div>
+            <div class="result-details">
+              <span>Ads detected: ${result.detectedAds}</span>
+              <span>Ads replaced: ${result.adsReplaced}</span>
+            </div>
+            <a href="/screenshots/${result.filename}" download class="download-btn small">Download</a>
+          </div>
+        `;
+      } else {
+        html += `
+          <div class="result-item failed">
+            <div class="result-header">
+              <span class="result-number">${index + 1}</span>
+              <span class="result-status">Failed</span>
+            </div>
+            <p class="result-url">${result.url}</p>
+            <p class="result-error">${result.error}</p>
+          </div>
+        `;
+      }
+    });
+
+    html += `
+          </div>
+        </div>
+      </div>
+    `;
+
+    resultsContent.innerHTML = html;
+  };
+
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
-    showLoading();
 
     try {
       // Get form data
@@ -92,12 +164,11 @@ document.addEventListener('DOMContentLoaded', () => {
       const adCreativeUrls = formData.getAll('adCreatives[]');
       const adSizes = formData.getAll('adSizes[]');
 
-      // Parse URLs (first URL for single screenshot)
+      // Parse URLs
       const urls = urlsText.split('\n').map(u => u.trim()).filter(u => u !== '');
 
       if (urls.length === 0) {
         showError('No URLs provided', 'Please enter at least one URL to capture.');
-        resetButton();
         return;
       }
 
@@ -109,24 +180,51 @@ document.addEventListener('DOMContentLoaded', () => {
         }))
         .filter(ad => ad.url !== '');
 
-      // Make API request (single URL for now)
-      const response = await fetch('/api/screenshot', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          url: urls[0],
-          adCreatives
-        })
-      });
+      // Determine if batch or single processing
+      if (urls.length === 1) {
+        // Single URL processing
+        showLoading();
 
-      const data = await response.json();
+        const response = await fetch('/api/screenshot', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            url: urls[0],
+            adCreatives
+          })
+        });
 
-      if (data.success) {
-        showSuccess(data);
+        const data = await response.json();
+
+        if (data.success) {
+          showSuccess(data);
+        } else {
+          showError(data.error, data.details);
+        }
       } else {
-        showError(data.error, data.details);
+        // Batch processing
+        showLoading(`Processing ${urls.length} URLs...`);
+
+        const response = await fetch('/api/screenshot/batch', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            urls,
+            adCreatives
+          })
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+          showBatchResults(data);
+        } else {
+          showError(data.error, data.details);
+        }
       }
     } catch (error) {
       console.error('Request failed:', error);

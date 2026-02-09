@@ -152,4 +152,120 @@ router.post('/', async (req, res) => {
   }
 });
 
+// Generate unique job ID
+const generateJobId = () => {
+  return `job-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+};
+
+// POST /api/batch-screenshot
+router.post('/batch', async (req, res) => {
+  const { urls = [], adCreatives = [] } = req.body;
+
+  // Validate URLs array
+  if (!Array.isArray(urls) || urls.length === 0) {
+    return res.status(400).json({
+      success: false,
+      error: 'URLs array is required',
+      details: 'Please provide an array of URLs in the request body'
+    });
+  }
+
+  // Filter and validate URLs
+  const validUrls = urls.filter(url => url && typeof url === 'string' && isValidUrl(url.trim()));
+
+  if (validUrls.length === 0) {
+    return res.status(400).json({
+      success: false,
+      error: 'No valid URLs provided',
+      details: 'All provided URLs are invalid. URLs must be valid HTTP or HTTPS URLs.'
+    });
+  }
+
+  // Validate ad creatives if provided
+  const validAdCreatives = adCreatives.filter(ad =>
+    ad && ad.url && ad.url.trim() !== '' && ad.size
+  );
+
+  const jobId = generateJobId();
+  const results = [];
+
+  console.log(`Starting batch job ${jobId} with ${validUrls.length} URL(s)`);
+
+  try {
+    await ensureScreenshotsDir();
+
+    // Process each URL sequentially
+    for (let i = 0; i < validUrls.length; i++) {
+      const url = validUrls[i].trim();
+      const progress = { current: i + 1, total: validUrls.length };
+
+      console.log(`[${jobId}] Processing ${progress.current}/${progress.total}: ${url}`);
+
+      try {
+        const filename = `${jobId}-${i + 1}-${new Date().toISOString().replace(/[:.]/g, '-')}.png`;
+        const outputPath = path.join(SCREENSHOTS_DIR, filename);
+
+        // Ad detection and replacement callback
+        let detectedAds = [];
+        let replacementResults = null;
+
+        const beforeCapture = async (page) => {
+          detectedAds = await detectAds(page);
+
+          if (detectedAds.length > 0 && validAdCreatives.length > 0) {
+            replacementResults = await processAdReplacement(page, detectedAds, validAdCreatives);
+          }
+
+          return { detectedAds, replacementResults };
+        };
+
+        const result = await captureScreenshot(url, outputPath, { beforeCapture });
+
+        results.push({
+          url,
+          success: true,
+          filename,
+          detectedAds: result.callbackResult?.detectedAds?.length || 0,
+          adsReplaced: result.callbackResult?.replacementResults?.successful?.length || 0
+        });
+
+        console.log(`[${jobId}] Completed ${progress.current}/${progress.total}: ${filename}`);
+      } catch (error) {
+        console.error(`[${jobId}] Failed ${progress.current}/${progress.total}: ${error.message}`);
+
+        results.push({
+          url,
+          success: false,
+          error: error.message
+        });
+      }
+    }
+
+    const successCount = results.filter(r => r.success).length;
+    const failCount = results.filter(r => !r.success).length;
+
+    console.log(`[${jobId}] Batch complete: ${successCount} successful, ${failCount} failed`);
+
+    res.json({
+      success: true,
+      jobId,
+      message: `Batch processing complete: ${successCount} successful, ${failCount} failed`,
+      totalUrls: validUrls.length,
+      successful: successCount,
+      failed: failCount,
+      results
+    });
+  } catch (error) {
+    console.error(`[${jobId}] Batch processing error:`, error.message);
+
+    res.status(500).json({
+      success: false,
+      jobId,
+      error: 'Batch processing failed',
+      details: error.message,
+      results
+    });
+  }
+});
+
 export default router;
