@@ -4,7 +4,7 @@ import { fileURLToPath } from 'url';
 import fs from 'fs/promises';
 import { createReadStream, createWriteStream } from 'fs';
 import archiver from 'archiver';
-import { captureScreenshot } from '../services/puppeteerService.js';
+import { captureScreenshot, getViewport, VIEWPORT_PRESETS } from '../services/puppeteerService.js';
 import { detectAds } from '../services/adDetection.js';
 import { processAdReplacement } from '../services/adReplacement.js';
 
@@ -34,15 +34,15 @@ const isValidUrl = (urlString) => {
   }
 };
 
-// Generate timestamp-based filename
-const generateFilename = () => {
+// Generate timestamp-based filename with optional viewport
+const generateFilename = (viewportName = 'desktop') => {
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  return `screenshot-${timestamp}.png`;
+  return `screenshot-${viewportName}-${timestamp}.png`;
 };
 
 // POST /api/screenshot
 router.post('/', async (req, res) => {
-  const { url, adCreatives = [] } = req.body;
+  const { url, adCreatives = [], viewport: viewportName = 'desktop' } = req.body;
 
   // Validate URL
   if (!url) {
@@ -61,6 +61,11 @@ router.post('/', async (req, res) => {
     });
   }
 
+  // Validate viewport
+  const validViewportNames = Object.keys(VIEWPORT_PRESETS);
+  const normalizedViewport = validViewportNames.includes(viewportName) ? viewportName : 'desktop';
+  const viewport = getViewport(normalizedViewport);
+
   // Validate ad creatives if provided
   const validAdCreatives = adCreatives.filter(ad =>
     ad && ad.url && ad.url.trim() !== '' && ad.size
@@ -69,10 +74,10 @@ router.post('/', async (req, res) => {
   try {
     await ensureScreenshotsDir();
 
-    const filename = generateFilename();
+    const filename = generateFilename(normalizedViewport);
     const outputPath = path.join(SCREENSHOTS_DIR, filename);
 
-    console.log(`Capturing screenshot of: ${url}`);
+    console.log(`Capturing screenshot of: ${url} (viewport: ${normalizedViewport})`);
     if (validAdCreatives.length > 0) {
       console.log(`With ${validAdCreatives.length} ad creative(s) to replace`);
     }
@@ -106,7 +111,7 @@ router.post('/', async (req, res) => {
       return { detectedAds, replacementResults };
     };
 
-    const result = await captureScreenshot(url, outputPath, { beforeCapture });
+    const result = await captureScreenshot(url, outputPath, { beforeCapture, viewport });
 
     console.log(`Screenshot saved: ${filename}`);
 
@@ -114,6 +119,7 @@ router.post('/', async (req, res) => {
       success: true,
       filename,
       message: 'Screenshot captured successfully',
+      viewport: normalizedViewport,
       detectedAds: result.callbackResult?.detectedAds || []
     };
 
@@ -161,7 +167,7 @@ const generateJobId = () => {
 
 // POST /api/batch-screenshot
 router.post('/batch', async (req, res) => {
-  const { urls = [], adCreatives = [] } = req.body;
+  const { urls = [], adCreatives = [], viewport: viewportName = 'desktop' } = req.body;
 
   // Validate URLs array
   if (!Array.isArray(urls) || urls.length === 0) {
@@ -183,6 +189,11 @@ router.post('/batch', async (req, res) => {
     });
   }
 
+  // Validate viewport
+  const validViewportNames = Object.keys(VIEWPORT_PRESETS);
+  const normalizedViewport = validViewportNames.includes(viewportName) ? viewportName : 'desktop';
+  const viewport = getViewport(normalizedViewport);
+
   // Validate ad creatives if provided
   const validAdCreatives = adCreatives.filter(ad =>
     ad && ad.url && ad.url.trim() !== '' && ad.size
@@ -191,7 +202,7 @@ router.post('/batch', async (req, res) => {
   const jobId = generateJobId();
   const results = [];
 
-  console.log(`Starting batch job ${jobId} with ${validUrls.length} URL(s)`);
+  console.log(`Starting batch job ${jobId} with ${validUrls.length} URL(s) (viewport: ${normalizedViewport})`);
 
   try {
     await ensureScreenshotsDir();
@@ -204,7 +215,7 @@ router.post('/batch', async (req, res) => {
       console.log(`[${jobId}] Processing ${progress.current}/${progress.total}: ${url}`);
 
       try {
-        const filename = `${jobId}-${i + 1}-${new Date().toISOString().replace(/[:.]/g, '-')}.png`;
+        const filename = `${jobId}-${normalizedViewport}-${i + 1}-${new Date().toISOString().replace(/[:.]/g, '-')}.png`;
         const outputPath = path.join(SCREENSHOTS_DIR, filename);
 
         // Ad detection and replacement callback
@@ -221,7 +232,7 @@ router.post('/batch', async (req, res) => {
           return { detectedAds, replacementResults };
         };
 
-        const result = await captureScreenshot(url, outputPath, { beforeCapture });
+        const result = await captureScreenshot(url, outputPath, { beforeCapture, viewport });
 
         results.push({
           url,
@@ -252,6 +263,7 @@ router.post('/batch', async (req, res) => {
       success: true,
       jobId,
       message: `Batch processing complete: ${successCount} successful, ${failCount} failed`,
+      viewport: normalizedViewport,
       totalUrls: validUrls.length,
       successful: successCount,
       failed: failCount,

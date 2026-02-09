@@ -200,6 +200,7 @@ document.addEventListener('DOMContentLoaded', () => {
       // Get form data
       const formData = new FormData(form);
       const urlsText = formData.get('urls');
+      const viewport = formData.get('viewport') || 'desktop';
       const adCreativeUrls = formData.getAll('adCreatives[]');
       const adSizes = formData.getAll('adSizes[]');
 
@@ -231,6 +232,7 @@ document.addEventListener('DOMContentLoaded', () => {
           },
           body: JSON.stringify({
             url: urls[0],
+            viewport,
             adCreatives
           })
         });
@@ -253,6 +255,7 @@ document.addEventListener('DOMContentLoaded', () => {
           },
           body: JSON.stringify({
             urls,
+            viewport,
             adCreatives
           })
         });

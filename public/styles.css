@@ -125,6 +125,23 @@ textarea:focus {
   border-color: #4a90d9;
 }
 
+.viewport-select {
+  width: 100%;
+  padding: 12px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  font-size: 1rem;
+  background: #fff;
+  cursor: pointer;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.viewport-select:focus {
+  outline: none;
+  border-color: #4a90d9;
+  box-shadow: 0 0 0 3px rgba(74, 144, 217, 0.1);
+}
+
 .submit-btn {
   width: 100%;
   padding: 14px 24px;
