@@ -2,6 +2,317 @@
 // Replaces detected ad placements with client ad creatives
 
 import { matchIABSize, matchVideoAspectRatio } from './adDetection.js';
+import { getBrowser } from './puppeteerService.js';
+import path from 'path';
+import fs from 'fs';
+
+// Directory for temporary creative screenshots
+const TEMP_CREATIVE_DIR = path.join(process.cwd(), 'screenshots', 'temp_creatives');
+
+// Ensure temp creative directory exists
+const ensureTempDir = () => {
+  if (!fs.existsSync(TEMP_CREATIVE_DIR)) {
+    fs.mkdirSync(TEMP_CREATIVE_DIR, { recursive: true });
+  }
+};
+
+/**
+ * Check if URL is a Google DV360 preview URL
+ * @param {string} url - URL to check
+ * @returns {boolean} - True if DV360 preview URL
+ */
+export const isDV360PreviewUrl = (url) => {
+  try {
+    const parsed = new URL(url);
+    return parsed.hostname === 'displayvideo.google.com' &&
+           parsed.pathname.includes('/doubleclick/preview');
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Extract size parameters from DV360 preview URL
+ * @param {string} url - DV360 preview URL
+ * @returns {object|null} - { width, height } or null
+ */
+export const extractDV360Size = (url) => {
+  try {
+    const parsed = new URL(url);
+    const flexWidth = parsed.searchParams.get('flexWidth');
+    const flexHeight = parsed.searchParams.get('flexHeight');
+
+    if (flexWidth && flexHeight) {
+      return {
+        width: parseInt(flexWidth, 10),
+        height: parseInt(flexHeight, 10)
+      };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Extract ad creative from DV360 preview page as screenshot
+ * @param {string} previewUrl - DV360 preview URL
+ * @param {string} adId - Unique identifier for the ad
+ * @returns {Promise<string|null>} - Path to screenshot or null on failure
+ */
+export const extractDV360Creative = async (previewUrl, adId) => {
+  ensureTempDir();
+
+  const browser = await getBrowser();
+  let page = null;
+
+  try {
+    page = await browser.newPage();
+
+    // Get size from URL parameters
+    const size = extractDV360Size(previewUrl);
+    const width = size?.width || 300;
+    const height = size?.height || 250;
+
+    // Set viewport to match ad size with some padding for the preview interface
+    await page.setViewport({
+      width: Math.max(width + 200, 800),
+      height: Math.max(height + 200, 600),
+      deviceScaleFactor: 2
+    });
+
+    // Set user agent to avoid bot detection
+    await page.setUserAgent(
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
+    );
+
+    console.log(`Loading DV360 preview for extraction: ${previewUrl}`);
+
+    // Navigate to preview page
+    await page.goto(previewUrl, { waitUntil: 'networkidle2', timeout: 45000 });
+
+    // Wait for the ad to fully render
+    await new Promise(resolve => setTimeout(resolve, 4000));
+
+    // Try to find the actual ad creative within the preview page
+    const creativeInfo = await page.evaluate((expectedWidth, expectedHeight) => {
+      // Strategy 1: Look for iframes containing ad content
+      const iframes = document.querySelectorAll('iframe');
+      for (const iframe of iframes) {
+        const rect = iframe.getBoundingClientRect();
+        // Check if iframe dimensions roughly match expected ad size
+        const widthMatch = Math.abs(rect.width - expectedWidth) < 50;
+        const heightMatch = Math.abs(rect.height - expectedHeight) < 50;
+
+        if (widthMatch && heightMatch && rect.width > 100 && rect.height > 50) {
+          return {
+            type: 'iframe',
+            selector: `iframe[src="${iframe.src}"]`,
+            bounds: {
+              x: rect.x,
+              y: rect.y,
+              width: rect.width,
+              height: rect.height
+            }
+          };
+        }
+      }
+
+      // Strategy 2: Look for preview container with specific classes
+      const previewSelectors = [
+        '.creative-preview-container',
+        '.preview-creative',
+        '[class*="preview"][class*="creative"]',
+        '[class*="ad-preview"]',
+        '.creative-frame',
+        '[data-creative-preview]',
+        // DV360 specific containers
+        '.preview-wrapper',
+        '[class*="PreviewFrame"]',
+        'creative-preview'
+      ];
+
+      for (const selector of previewSelectors) {
+        const container = document.querySelector(selector);
+        if (container) {
+          const rect = container.getBoundingClientRect();
+          if (rect.width > 100 && rect.height > 50) {
+            return {
+              type: 'container',
+              selector: selector,
+              bounds: {
+                x: rect.x,
+                y: rect.y,
+                width: rect.width,
+                height: rect.height
+              }
+            };
+          }
+        }
+      }
+
+      // Strategy 3: Find any element matching the expected dimensions
+      const allElements = document.querySelectorAll('div, iframe, img');
+      for (const el of allElements) {
+        const rect = el.getBoundingClientRect();
+        const widthMatch = Math.abs(rect.width - expectedWidth) < 20;
+        const heightMatch = Math.abs(rect.height - expectedHeight) < 20;
+
+        if (widthMatch && heightMatch && rect.width > 100) {
+          // Make sure it's not a tiny element or hidden
+          const style = window.getComputedStyle(el);
+          if (style.visibility !== 'hidden' && style.display !== 'none') {
+            return {
+              type: 'element',
+              bounds: {
+                x: rect.x,
+                y: rect.y,
+                width: rect.width,
+                height: rect.height
+              }
+            };
+          }
+        }
+      }
+
+      // Strategy 4: Look for the largest visible element that could be the ad
+      let bestCandidate = null;
+      let bestArea = 0;
+
+      const candidates = document.querySelectorAll('iframe, [class*="creative"], [class*="preview"], [class*="ad"]');
+      for (const el of candidates) {
+        const rect = el.getBoundingClientRect();
+        const area = rect.width * rect.height;
+
+        // Must be visible and have reasonable size
+        if (rect.width >= 100 && rect.height >= 50 && area > bestArea) {
+          const style = window.getComputedStyle(el);
+          if (style.visibility !== 'hidden' && style.display !== 'none') {
+            bestArea = area;
+            bestCandidate = {
+              type: 'best-match',
+              bounds: {
+                x: rect.x,
+                y: rect.y,
+                width: rect.width,
+                height: rect.height
+              }
+            };
+          }
+        }
+      }
+
+      return bestCandidate;
+    }, width, height);
+
+    if (!creativeInfo) {
+      console.warn('Could not locate ad creative in DV360 preview page');
+      // Take screenshot of entire page as fallback
+      const fallbackPath = path.join(TEMP_CREATIVE_DIR, `dv360_fallback_${adId}.png`);
+      await page.screenshot({ path: fallbackPath, fullPage: false });
+      return fallbackPath;
+    }
+
+    console.log(`Found creative element: ${creativeInfo.type}`, creativeInfo.bounds);
+
+    // Take screenshot of just the creative area
+    const screenshotPath = path.join(TEMP_CREATIVE_DIR, `dv360_${adId}.png`);
+
+    await page.screenshot({
+      path: screenshotPath,
+      clip: {
+        x: Math.max(0, Math.floor(creativeInfo.bounds.x)),
+        y: Math.max(0, Math.floor(creativeInfo.bounds.y)),
+        width: Math.ceil(creativeInfo.bounds.width),
+        height: Math.ceil(creativeInfo.bounds.height)
+      }
+    });
+
+    console.log(`Extracted DV360 creative screenshot: ${screenshotPath}`);
+    return screenshotPath;
+
+  } catch (error) {
+    console.error('Failed to extract DV360 creative:', error.message);
+    return null;
+  } finally {
+    if (page) {
+      await page.close();
+    }
+  }
+};
+
+/**
+ * Convert image file to base64 data URL
+ * @param {string} filePath - Path to image file
+ * @returns {string|null} - Base64 data URL or null on failure
+ */
+const fileToBase64DataUrl = (filePath) => {
+  try {
+    const imageBuffer = fs.readFileSync(filePath);
+    const base64 = imageBuffer.toString('base64');
+    const ext = path.extname(filePath).toLowerCase().slice(1);
+    const mimeType = ext === 'jpg' ? 'image/jpeg' : `image/${ext}`;
+    return `data:${mimeType};base64,${base64}`;
+  } catch (error) {
+    console.error(`Failed to convert file to base64: ${error.message}`);
+    return null;
+  }
+};
+
+/**
+ * Pre-process client ads to handle DV360 URLs
+ * Extracts creatives from DV360 preview pages and converts to base64 data URLs
+ * @param {Array} clientAds - Client ads array
+ * @returns {Promise<Array>} - Processed client ads with DV360 URLs converted
+ */
+export const preprocessClientAds = async (clientAds) => {
+  const processedAds = [];
+
+  for (let i = 0; i < clientAds.length; i++) {
+    const ad = clientAds[i];
+
+    if (ad.url && isDV360PreviewUrl(ad.url)) {
+      console.log(`Processing DV360 preview URL: ${ad.url}`);
+
+      // Extract the creative from DV360 preview
+      const screenshotPath = await extractDV360Creative(ad.url, `ad_${i}_${Date.now()}`);
+
+      if (screenshotPath) {
+        // Convert screenshot to base64 data URL for browser context
+        const dataUrl = fileToBase64DataUrl(screenshotPath);
+
+        if (dataUrl) {
+          processedAds.push({
+            ...ad,
+            originalUrl: ad.url,
+            url: dataUrl,
+            isDV360Extracted: true
+          });
+          console.log(`DV360 creative extracted and converted to base64 for ad ${i}`);
+
+          // Clean up temporary file
+          try {
+            fs.unlinkSync(screenshotPath);
+          } catch {
+            // Ignore cleanup errors
+          }
+        } else {
+          // Keep original URL as fallback
+          console.warn(`Failed to convert DV360 creative to base64 for ad ${i}, using original URL`);
+          processedAds.push(ad);
+        }
+      } else {
+        // Keep original URL as fallback
+        console.warn(`Failed to extract DV360 creative for ad ${i}, using original URL`);
+        processedAds.push(ad);
+      }
+    } else {
+      processedAds.push(ad);
+    }
+  }
+
+  return processedAds;
+};
 
 // SVG play button overlay for video ad placements
 const PLAY_BUTTON_SVG = `
@@ -168,7 +479,9 @@ export const replaceAds = async (page, matches) => {
             element.style.backgroundColor = '#000';
 
             // Check if URL is an image (thumbnail) or video
-            const isImageUrl = /\.(jpg|jpeg|png|gif|webp|svg)(\?.*)?$/i.test(adUrl);
+            // Also check for base64 data URLs (used for DV360 extracted creatives)
+            const isImageUrl = /\.(jpg|jpeg|png|gif|webp|svg)(\?.*)?$/i.test(adUrl) ||
+                               /^data:image\//i.test(adUrl);
 
             if (isImageUrl) {
               // Use image as video thumbnail
@@ -239,7 +552,9 @@ export const replaceAds = async (page, matches) => {
             element.style.justifyContent = 'center';
 
             // Check if URL is an image or iframe source
-            const isImageUrl = /\.(jpg|jpeg|png|gif|webp|svg)(\?.*)?$/i.test(adUrl);
+            // Also check for base64 data URLs (used for DV360 extracted creatives)
+            const isImageUrl = /\.(jpg|jpeg|png|gif|webp|svg)(\?.*)?$/i.test(adUrl) ||
+                               /^data:image\//i.test(adUrl);
 
             if (isImageUrl) {
               const img = document.createElement('img');
@@ -336,9 +651,15 @@ export const processAdReplacement = async (page, placements, clientAds) => {
     return { successful: [], failed: [], matches: [] };
   }
 
+  // Pre-process client ads to handle DV360 preview URLs
+  // This extracts creatives from preview pages and converts to local screenshots
+  console.log('Pre-processing client ads for DV360 URLs...');
+  const processedClientAds = await preprocessClientAds(validClientAds);
+  console.log(`Processed ${processedClientAds.length} client ads`);
+
   // Separate regular ads from video ads
-  const regularAds = validClientAds.filter(ad => ad.type !== 'video');
-  const videoAds = validClientAds.filter(ad => ad.type === 'video');
+  const regularAds = processedClientAds.filter(ad => ad.type !== 'video');
+  const videoAds = processedClientAds.filter(ad => ad.type === 'video');
 
   // Separate regular placements from video placements
   const regularPlacements = placements.filter(p => p.type !== 'video');
@@ -369,7 +690,12 @@ export const processAdReplacement = async (page, placements, clientAds) => {
     ...results,
     matches: allMatches.map(m => ({
       placement: m.placement.selector,
-      clientAd: { url: m.clientAd.url, size: m.clientAd.size, type: m.clientAd.type },
+      clientAd: {
+        url: m.clientAd.originalUrl || m.clientAd.url, // Return original URL in metadata
+        size: m.clientAd.size,
+        type: m.clientAd.type,
+        isDV360Extracted: m.clientAd.isDV360Extracted || false
+      },
       isVideo: m.isVideo || false
     }))
   };
@@ -381,5 +707,9 @@ export default {
   matchVideoAdsToplacements,
   replaceAds,
   waitForAdsToLoad,
-  processAdReplacement
+  processAdReplacement,
+  isDV360PreviewUrl,
+  extractDV360Size,
+  extractDV360Creative,
+  preprocessClientAds
 };
