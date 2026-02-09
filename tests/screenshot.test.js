@@ -43,7 +43,7 @@ describe('Screenshot API', () => {
 
       expect(response.status).toBe(400);
       expect(response.body.success).toBe(false);
-      expect(response.body.error).toBe('Invalid URL format');
+      expect(response.body.error).toBe('URL must use HTTP or HTTPS protocol');
     });
 
     it('should accept valid http URL format', async () => {

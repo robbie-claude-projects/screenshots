@@ -7,6 +7,7 @@ import archiver from 'archiver';
 import { captureScreenshot, getViewport, VIEWPORT_PRESETS } from '../services/puppeteerService.js';
 import { detectAds } from '../services/adDetection.js';
 import { processAdReplacement } from '../services/adReplacement.js';
+import { validateUrl, validateUrls, validateAdCreatives, formatError } from '../utils/validation.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -44,20 +45,13 @@ const generateFilename = (viewportName = 'desktop') => {
 router.post('/', async (req, res) => {
   const { url, adCreatives = [], viewport: viewportName = 'desktop' } = req.body;
 
-  // Validate URL
-  if (!url) {
+  // Validate URL using validation utility
+  const urlValidation = validateUrl(url);
+  if (!urlValidation.valid) {
     return res.status(400).json({
       success: false,
-      error: 'URL is required',
-      details: 'Please provide a URL in the request body'
-    });
-  }
-
-  if (!isValidUrl(url)) {
-    return res.status(400).json({
-      success: false,
-      error: 'Invalid URL format',
-      details: 'URL must be a valid HTTP or HTTPS URL'
+      error: urlValidation.error,
+      details: 'Please provide a valid HTTP or HTTPS URL'
     });
   }
 
@@ -66,10 +60,14 @@ router.post('/', async (req, res) => {
   const normalizedViewport = validViewportNames.includes(viewportName) ? viewportName : 'desktop';
   const viewport = getViewport(normalizedViewport);
 
-  // Validate ad creatives if provided
-  const validAdCreatives = adCreatives.filter(ad =>
-    ad && ad.url && ad.url.trim() !== '' && ad.size
-  );
+  // Validate ad creatives using validation utility
+  const adValidation = validateAdCreatives(adCreatives);
+  const validAdCreatives = adValidation.valid;
+
+  // Log any invalid ad creatives
+  if (adValidation.invalid.length > 0) {
+    console.log(`Warning: ${adValidation.invalid.length} invalid ad creative(s) skipped`);
+  }
 
   try {
     await ensureScreenshotsDir();
@@ -136,25 +134,13 @@ router.post('/', async (req, res) => {
   } catch (error) {
     console.error(`Screenshot capture failed for ${url}:`, error.message);
 
-    // Determine error type for user-friendly message
-    let errorMessage = 'Failed to capture screenshot';
-    let details = error.message;
-
-    if (error.message.includes('net::ERR_NAME_NOT_RESOLVED')) {
-      errorMessage = 'Could not resolve URL';
-      details = 'The website address could not be found. Please check the URL.';
-    } else if (error.message.includes('net::ERR_CONNECTION_REFUSED')) {
-      errorMessage = 'Connection refused';
-      details = 'The website refused the connection. It may be down or blocking requests.';
-    } else if (error.message.includes('Timeout')) {
-      errorMessage = 'Page load timeout';
-      details = 'The page took too long to load. Try again or check if the website is accessible.';
-    }
+    // Use formatError utility for user-friendly messages
+    const formattedError = formatError(error, 'Screenshot capture');
 
     res.status(500).json({
       success: false,
-      error: errorMessage,
-      details,
+      error: formattedError.message,
+      details: formattedError.details,
       timestamp: new Date().toISOString()
     });
   }
@@ -178,14 +164,25 @@ router.post('/batch', async (req, res) => {
     });
   }
 
-  // Filter and validate URLs
-  const validUrls = urls.filter(url => url && typeof url === 'string' && isValidUrl(url.trim()));
+  // Use validation utility for URLs
+  const urlValidation = validateUrls(urls);
+  const validUrls = urlValidation.valid;
+
+  // Log invalid and duplicate URLs
+  if (urlValidation.invalid.length > 0) {
+    console.log(`Warning: ${urlValidation.invalid.length} invalid URL(s) skipped`);
+    urlValidation.invalid.forEach(inv => console.log(`  - Invalid: ${inv.url} (${inv.error})`));
+  }
+  if (urlValidation.duplicates.length > 0) {
+    console.log(`Warning: ${urlValidation.duplicates.length} duplicate URL(s) skipped`);
+  }
 
   if (validUrls.length === 0) {
     return res.status(400).json({
       success: false,
       error: 'No valid URLs provided',
-      details: 'All provided URLs are invalid. URLs must be valid HTTP or HTTPS URLs.'
+      details: 'All provided URLs are invalid. URLs must be valid HTTP or HTTPS URLs.',
+      invalidUrls: urlValidation.invalid.map(inv => ({ url: inv.url, error: inv.error }))
     });
   }
 
@@ -194,10 +191,14 @@ router.post('/batch', async (req, res) => {
   const normalizedViewport = validViewportNames.includes(viewportName) ? viewportName : 'desktop';
   const viewport = getViewport(normalizedViewport);
 
-  // Validate ad creatives if provided
-  const validAdCreatives = adCreatives.filter(ad =>
-    ad && ad.url && ad.url.trim() !== '' && ad.size
-  );
+  // Validate ad creatives using validation utility
+  const adValidation = validateAdCreatives(adCreatives);
+  const validAdCreatives = adValidation.valid;
+
+  // Log any invalid ad creatives
+  if (adValidation.invalid.length > 0) {
+    console.log(`Warning: ${adValidation.invalid.length} invalid ad creative(s) skipped`);
+  }
 
   const jobId = generateJobId();
   const results = [];

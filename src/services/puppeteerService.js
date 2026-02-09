@@ -65,6 +65,59 @@ export const closeBrowser = async () => {
   }
 };
 
+// Errors that should trigger a retry
+const RETRYABLE_ERRORS = [
+  'net::ERR_NAME_NOT_RESOLVED',
+  'net::ERR_CONNECTION_REFUSED',
+  'net::ERR_CONNECTION_TIMED_OUT',
+  'net::ERR_CONNECTION_RESET',
+  'net::ERR_NETWORK_CHANGED',
+  'net::ERR_INTERNET_DISCONNECTED',
+  'Timeout',
+  'Navigation timeout'
+];
+
+// Check if error is retryable
+const isRetryableError = (error) => {
+  const message = error.message || '';
+  return RETRYABLE_ERRORS.some(errType => message.includes(errType));
+};
+
+// Delay helper
+const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+// Navigate to URL with retry logic
+const navigateWithRetry = async (page, url, maxRetries = 1, retryDelayMs = 5000) => {
+  let lastError = null;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      if (attempt > 0) {
+        console.log(`Retry attempt ${attempt}/${maxRetries} for: ${url}`);
+        await delay(retryDelayMs);
+      }
+
+      await page.goto(url, {
+        waitUntil: 'networkidle2',
+        timeout: 60000
+      });
+
+      return; // Success
+    } catch (error) {
+      lastError = error;
+
+      // Only retry for specific network/timeout errors
+      if (!isRetryableError(error) || attempt >= maxRetries) {
+        throw error;
+      }
+
+      console.log(`Navigation failed (${error.message}), will retry...`);
+    }
+  }
+
+  throw lastError;
+};
+
 export const captureScreenshot = async (url, outputPath, options = {}) => {
   const browser = await getBrowser();
   const page = await browser.newPage();
@@ -78,10 +131,8 @@ export const captureScreenshot = async (url, outputPath, options = {}) => {
       'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
     );
 
-    await page.goto(url, {
-      waitUntil: 'networkidle2',
-      timeout: 60000
-    });
+    // Navigate with retry logic for network failures
+    await navigateWithRetry(page, url, options.maxRetries || 1, options.retryDelayMs || 5000);
 
     // Run beforeCapture callback if provided (for ad detection/replacement)
     let callbackResult = null;
