@@ -196,3 +196,149 @@ footer {
     width: 100%;
   }
 }
+
+/* Loading spinner */
+.loading {
+  text-align: center;
+  padding: 40px 20px;
+}
+
+.spinner {
+  width: 40px;
+  height: 40px;
+  border: 4px solid #f3f3f3;
+  border-top: 4px solid #4a90d9;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  margin: 0 auto 16px;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.loading p {
+  color: #666;
+  font-size: 1rem;
+}
+
+/* Error message */
+.error-message {
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  padding: 20px;
+  color: #991b1b;
+}
+
+.error-message h3 {
+  color: #991b1b;
+  margin-bottom: 8px;
+}
+
+.error-message p {
+  margin-bottom: 4px;
+}
+
+/* Success message */
+.success-message {
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-radius: 8px;
+  padding: 20px;
+}
+
+.success-message h3 {
+  color: #166534;
+  margin-bottom: 16px;
+}
+
+/* Screenshot result */
+.screenshot-result {
+  margin-bottom: 20px;
+}
+
+.screenshot-link {
+  display: block;
+  margin-bottom: 12px;
+}
+
+.screenshot-preview {
+  max-width: 100%;
+  height: auto;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.screenshot-actions {
+  display: flex;
+  gap: 12px;
+}
+
+.download-btn {
+  display: inline-block;
+  padding: 10px 20px;
+  background: #4a90d9;
+  color: #fff;
+  text-decoration: none;
+  border-radius: 6px;
+  font-weight: 500;
+  transition: background-color 0.2s;
+}
+
+.download-btn:hover {
+  background: #3a7bc8;
+}
+
+/* Detected ads */
+.detected-ads {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid #bbf7d0;
+}
+
+.detected-ads h4 {
+  color: #166534;
+  margin-bottom: 8px;
+}
+
+.detected-ads ul {
+  list-style: none;
+  padding: 0;
+}
+
+.detected-ads li {
+  padding: 6px 0;
+  color: #333;
+  font-size: 0.9rem;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.detected-ads li:last-child {
+  border-bottom: none;
+}
+
+.no-ads {
+  color: #666;
+  font-style: italic;
+  margin-top: 12px;
+}
+
+/* Replacement results */
+.replacement-results {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid #bbf7d0;
+}
+
+.replacement-results h4 {
+  color: #166534;
+  margin-bottom: 8px;
+}
+
+.replacement-results p {
+  color: #333;
+  font-size: 0.9rem;
+}
