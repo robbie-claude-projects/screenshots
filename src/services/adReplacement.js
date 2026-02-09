@@ -323,6 +323,36 @@ const PLAY_BUTTON_SVG = `
 `;
 
 /**
+ * Check if two sizes match within a percentage tolerance
+ * @param {object} size1 - { width, height }
+ * @param {object} size2 - { width, height }
+ * @param {number} tolerancePercent - Tolerance as percentage (e.g., 15 for 15%)
+ * @returns {boolean} - True if sizes match within tolerance
+ */
+const sizesMatchWithTolerance = (size1, size2, tolerancePercent = 15) => {
+  const widthDiff = Math.abs(size1.width - size2.width);
+  const heightDiff = Math.abs(size1.height - size2.height);
+
+  const widthTolerance = Math.max(size1.width, size2.width) * (tolerancePercent / 100);
+  const heightTolerance = Math.max(size1.height, size2.height) * (tolerancePercent / 100);
+
+  return widthDiff <= widthTolerance && heightDiff <= heightTolerance;
+};
+
+/**
+ * Check if aspect ratios match (for flexible size matching)
+ * @param {object} size1 - { width, height }
+ * @param {object} size2 - { width, height }
+ * @param {number} tolerance - Aspect ratio tolerance (e.g., 0.1 for 10%)
+ * @returns {boolean} - True if aspect ratios are similar
+ */
+const aspectRatiosMatch = (size1, size2, tolerance = 0.15) => {
+  const ratio1 = size1.width / size1.height;
+  const ratio2 = size2.width / size2.height;
+  return Math.abs(ratio1 - ratio2) / Math.max(ratio1, ratio2) <= tolerance;
+};
+
+/**
  * Parse ad size string into width and height
  * @param {string} sizeString - Size string like "300x250"
  * @returns {object|null} - { width, height } or null if invalid
@@ -339,6 +369,10 @@ export const parseSize = (sizeString) => {
 
 /**
  * Match client ads to detected placements by size
+ * Uses a multi-tier matching approach:
+ * 1. Exact size match
+ * 2. IAB standard size match (within 20px tolerance)
+ * 3. Flexible tolerance match (within 15% and similar aspect ratio)
  * @param {Array} placements - Detected ad placements
  * @param {Array} clientAds - Client ads with { url, size } properties
  * @returns {Array} - Array of matches { placement, clientAd }
@@ -346,8 +380,9 @@ export const parseSize = (sizeString) => {
 export const matchAdsToplacements = (placements, clientAds) => {
   const matches = [];
   const usedPlacements = new Set();
+  const usedClientAds = new Set();
 
-  // Sort client ads by size to prioritize exact matches
+  // Sort client ads by size (largest first) to prioritize bigger placements
   const sortedClientAds = [...clientAds].sort((a, b) => {
     const sizeA = parseSize(a.size);
     const sizeB = parseSize(b.size);
@@ -355,35 +390,94 @@ export const matchAdsToplacements = (placements, clientAds) => {
     return (sizeB.width * sizeB.height) - (sizeA.width * sizeA.height);
   });
 
+  // Sort placements by size (largest first) to match bigger ads first
+  const sortedPlacements = [...placements].sort((a, b) => {
+    return (b.size.width * b.size.height) - (a.size.width * a.size.height);
+  });
+
+  // Pass 1: Exact matches
   for (const clientAd of sortedClientAds) {
+    if (usedClientAds.has(clientAd.url)) continue;
     const targetSize = parseSize(clientAd.size);
     if (!targetSize) continue;
 
-    // Find matching placements for this ad size
-    for (const placement of placements) {
+    for (const placement of sortedPlacements) {
       if (usedPlacements.has(placement.selector)) continue;
 
       const placementSize = placement.size;
-
-      // Check for exact match or match within tolerance
       const isExactMatch =
         placementSize.width === targetSize.width &&
         placementSize.height === targetSize.height;
 
-      const isToleranceMatch = matchIABSize(
-        placementSize.width,
-        placementSize.height,
-        10
-      ) === clientAd.size;
-
-      if (isExactMatch || isToleranceMatch) {
-        matches.push({
-          placement,
-          clientAd
-        });
+      if (isExactMatch) {
+        matches.push({ placement, clientAd, matchType: 'exact' });
         usedPlacements.add(placement.selector);
-        break; // Move to next client ad
+        usedClientAds.add(clientAd.url);
+        console.log(`Exact match: ${clientAd.size} -> ${placement.sizeString} at ${placement.selector}`);
+        break;
       }
+    }
+  }
+
+  // Pass 2: IAB tolerance matches (within 20px)
+  for (const clientAd of sortedClientAds) {
+    if (usedClientAds.has(clientAd.url)) continue;
+    const targetSize = parseSize(clientAd.size);
+    if (!targetSize) continue;
+
+    for (const placement of sortedPlacements) {
+      if (usedPlacements.has(placement.selector)) continue;
+
+      const placementSize = placement.size;
+
+      // Check if placement matches an IAB size that equals the client ad size
+      const iabMatch = matchIABSize(placementSize.width, placementSize.height, 20);
+      if (iabMatch === clientAd.size) {
+        matches.push({ placement, clientAd, matchType: 'iab-tolerance' });
+        usedPlacements.add(placement.selector);
+        usedClientAds.add(clientAd.url);
+        console.log(`IAB tolerance match: ${clientAd.size} -> ${placement.sizeString} (${iabMatch}) at ${placement.selector}`);
+        break;
+      }
+    }
+  }
+
+  // Pass 3: Flexible tolerance matches (within 15% and similar aspect ratio)
+  for (const clientAd of sortedClientAds) {
+    if (usedClientAds.has(clientAd.url)) continue;
+    const targetSize = parseSize(clientAd.size);
+    if (!targetSize) continue;
+
+    for (const placement of sortedPlacements) {
+      if (usedPlacements.has(placement.selector)) continue;
+
+      const placementSize = placement.size;
+
+      // Check if sizes are within 15% tolerance AND have similar aspect ratio
+      const toleranceMatch = sizesMatchWithTolerance(placementSize, targetSize, 15);
+      const ratioMatch = aspectRatiosMatch(placementSize, targetSize, 0.15);
+
+      if (toleranceMatch && ratioMatch) {
+        matches.push({ placement, clientAd, matchType: 'flexible-tolerance' });
+        usedPlacements.add(placement.selector);
+        usedClientAds.add(clientAd.url);
+        console.log(`Flexible match: ${clientAd.size} -> ${placement.sizeString} at ${placement.selector}`);
+        break;
+      }
+    }
+  }
+
+  // Log unmatched client ads for debugging
+  for (const clientAd of sortedClientAds) {
+    if (!usedClientAds.has(clientAd.url)) {
+      console.log(`No placement found for client ad: ${clientAd.size} (${clientAd.url.substring(0, 50)}...)`);
+    }
+  }
+
+  // Log unmatched placements for debugging
+  for (const placement of sortedPlacements) {
+    if (!usedPlacements.has(placement.selector)) {
+      console.log(`No client ad matched for placement: ${placement.sizeString} at ${placement.selector}`);
     }
   }
 
