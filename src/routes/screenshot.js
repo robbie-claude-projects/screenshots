@@ -8,6 +8,34 @@ import { captureScreenshot, getViewport, VIEWPORT_PRESETS } from '../services/pu
 import { detectAds } from '../services/adDetection.js';
 import { processAdReplacement } from '../services/adReplacement.js';
 import { validateUrl, validateUrls, validateAdCreatives, formatError } from '../utils/validation.js';
+import config from '../config.js';
+
+// Process URLs in parallel with concurrency limit
+const processInParallel = async (items, processor, maxConcurrent = config.maxConcurrent) => {
+  const results = [];
+  let currentIndex = 0;
+
+  const processNext = async () => {
+    while (currentIndex < items.length) {
+      const index = currentIndex++;
+      const item = items[index];
+      try {
+        const result = await processor(item, index);
+        results[index] = result;
+      } catch (error) {
+        results[index] = { error: error.message, item };
+      }
+    }
+  };
+
+  // Start concurrent workers
+  const workers = Array(Math.min(maxConcurrent, items.length))
+    .fill(null)
+    .map(() => processNext());
+
+  await Promise.all(workers);
+  return results;
+};
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -260,9 +288,10 @@ router.post('/batch', async (req, res) => {
   const useCustomSelectors = validCustomSelectors.length > 0;
 
   const jobId = generateJobId();
-  const results = [];
+  const startTime = Date.now();
 
   console.log(`Starting batch job ${jobId} with ${validUrls.length} URL(s) (viewport: ${normalizedViewport})`);
+  console.log(`Max concurrent: ${config.maxConcurrent}`);
   if (useCustomSelectors) {
     console.log(`Using ${validCustomSelectors.length} custom selector(s)`);
   }
@@ -270,68 +299,77 @@ router.post('/batch', async (req, res) => {
   try {
     await ensureScreenshotsDir();
 
-    // Process each URL sequentially
-    for (let i = 0; i < validUrls.length; i++) {
-      const url = validUrls[i].trim();
-      const progress = { current: i + 1, total: validUrls.length };
+    // Process URLs in parallel with concurrency limit
+    const processUrl = async (url, index) => {
+      const urlStartTime = Date.now();
+      const cleanUrl = url.trim();
 
-      console.log(`[${jobId}] Processing ${progress.current}/${progress.total}: ${url}`);
+      console.log(`[${jobId}] Processing ${index + 1}/${validUrls.length}: ${cleanUrl}`);
 
-      try {
-        const filename = `${jobId}-${normalizedViewport}-${i + 1}-${new Date().toISOString().replace(/[:.]/g, '-')}.png`;
-        const outputPath = path.join(SCREENSHOTS_DIR, filename);
+      const filename = `${jobId}-${normalizedViewport}-${index + 1}-${new Date().toISOString().replace(/[:.]/g, '-')}.png`;
+      const outputPath = path.join(SCREENSHOTS_DIR, filename);
 
-        // Ad detection and replacement callback
+      // Ad detection and replacement callback
+      const beforeCapture = async (page) => {
         let detectedAds = [];
         let replacementResults = null;
 
-        const beforeCapture = async (page) => {
-          // Use custom selectors or auto-detect
-          if (useCustomSelectors) {
-            detectedAds = await customSelectorsToplacements(page, validCustomSelectors);
-          } else {
-            detectedAds = await detectAds(page);
-          }
+        // Use custom selectors or auto-detect
+        if (useCustomSelectors) {
+          detectedAds = await customSelectorsToplacements(page, validCustomSelectors);
+        } else {
+          detectedAds = await detectAds(page);
+        }
 
-          if (detectedAds.length > 0 && validAdCreatives.length > 0) {
-            replacementResults = await processAdReplacement(page, detectedAds, validAdCreatives);
-          }
+        if (detectedAds.length > 0 && validAdCreatives.length > 0) {
+          replacementResults = await processAdReplacement(page, detectedAds, validAdCreatives);
+        }
 
-          return { detectedAds, replacementResults };
-        };
+        return { detectedAds, replacementResults };
+      };
 
-        const result = await captureScreenshot(url, outputPath, { beforeCapture, viewport });
+      const result = await captureScreenshot(cleanUrl, outputPath, { beforeCapture, viewport });
+      const duration = ((Date.now() - urlStartTime) / 1000).toFixed(1);
 
-        results.push({
-          url,
-          success: true,
-          filename,
-          detectedAds: result.callbackResult?.detectedAds?.length || 0,
-          adsReplaced: result.callbackResult?.replacementResults?.successful?.length || 0
-        });
+      console.log(`[${jobId}] Completed ${index + 1}/${validUrls.length}: ${filename} (${duration}s)`);
 
-        console.log(`[${jobId}] Completed ${progress.current}/${progress.total}: ${filename}`);
-      } catch (error) {
-        console.error(`[${jobId}] Failed ${progress.current}/${progress.total}: ${error.message}`);
+      return {
+        url: cleanUrl,
+        success: true,
+        filename,
+        detectedAds: result.callbackResult?.detectedAds?.length || 0,
+        adsReplaced: result.callbackResult?.replacementResults?.successful?.length || 0
+      };
+    };
 
-        results.push({
-          url,
+    const rawResults = await processInParallel(validUrls, processUrl, config.maxConcurrent);
+
+    // Map results, handling errors
+    const results = rawResults.map((result, index) => {
+      if (result.error) {
+        console.error(`[${jobId}] Failed ${index + 1}/${validUrls.length}: ${result.error}`);
+        return {
+          url: validUrls[index],
           success: false,
-          error: error.message
-        });
+          error: result.error
+        };
       }
-    }
+      return result;
+    });
 
     const successCount = results.filter(r => r.success).length;
     const failCount = results.filter(r => !r.success).length;
+    const totalDuration = ((Date.now() - startTime) / 1000).toFixed(1);
 
-    console.log(`[${jobId}] Batch complete: ${successCount} successful, ${failCount} failed`);
+    console.log(`[${jobId}] Batch complete: ${successCount} successful, ${failCount} failed (${totalDuration}s total)`);
 
     // Generate metadata for the job
     const metadata = {
       jobId,
       timestamp: new Date().toISOString(),
+      processingTimeSeconds: parseFloat(totalDuration),
       viewport: normalizedViewport,
+      maxConcurrent: config.maxConcurrent,
       totalUrls: validUrls.length,
       successful: successCount,
       failed: failCount,
@@ -361,6 +399,7 @@ router.post('/batch', async (req, res) => {
       success: true,
       jobId,
       message: `Batch processing complete: ${successCount} successful, ${failCount} failed`,
+      processingTimeSeconds: parseFloat(totalDuration),
       viewport: normalizedViewport,
       totalUrls: validUrls.length,
       successful: successCount,
