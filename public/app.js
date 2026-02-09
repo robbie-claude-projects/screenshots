@@ -7,6 +7,43 @@ document.addEventListener('DOMContentLoaded', () => {
   const submitBtn = form.querySelector('.submit-btn');
   const manualSelectorsCheckbox = document.getElementById('manual-selectors');
   const customSelectorsGroup = document.getElementById('custom-selectors-group');
+  const urlTextarea = document.getElementById('urls');
+
+  // Toast notification system
+  let toastContainer = document.getElementById('toast-container');
+  if (!toastContainer) {
+    toastContainer = document.createElement('div');
+    toastContainer.id = 'toast-container';
+    document.body.appendChild(toastContainer);
+  }
+
+  const showToast = (message, type = 'info', duration = 4000) => {
+    const toast = document.createElement('div');
+    toast.className = `toast toast-${type}`;
+    toast.innerHTML = `<span>${message}</span><button class="toast-close">&times;</button>`;
+    toastContainer.appendChild(toast);
+
+    // Close button handler
+    toast.querySelector('.toast-close').addEventListener('click', () => {
+      toast.remove();
+    });
+
+    // Auto-remove after duration
+    setTimeout(() => {
+      if (toast.parentNode) {
+        toast.classList.add('toast-fade');
+        setTimeout(() => toast.remove(), 300);
+      }
+    }, duration);
+  };
+
+  // Keyboard shortcut: Ctrl+Enter to submit
+  urlTextarea.addEventListener('keydown', (e) => {
+    if (e.ctrlKey && e.key === 'Enter') {
+      e.preventDefault();
+      form.dispatchEvent(new Event('submit', { cancelable: true }));
+    }
+  });
 
   // Toggle custom selectors visibility
   manualSelectorsCheckbox.addEventListener('change', () => {
@@ -297,8 +334,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (data.success) {
           showSuccess(data);
+          showToast('Screenshot captured successfully!', 'success');
         } else {
           showError(data.error, data.details);
+          showToast(data.error || 'Screenshot failed', 'error');
         }
       } else {
         // Batch processing
@@ -321,13 +360,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (data.success) {
           showBatchResults(data);
+          const msg = `Batch complete: ${data.successful} successful, ${data.failed} failed`;
+          showToast(msg, data.failed > 0 ? 'warning' : 'success');
         } else {
           showError(data.error, data.details);
+          showToast(data.error || 'Batch processing failed', 'error');
         }
       }
     } catch (error) {
       console.error('Request failed:', error);
       showError('Request Failed', 'Could not connect to the server. Please try again.');
+      showToast('Connection failed. Please try again.', 'error');
     } finally {
       resetButton();
     }
