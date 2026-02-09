@@ -541,7 +541,11 @@ export const replaceAds = async (page, matches) => {
     const { placement, clientAd, isVideo = false } = match;
 
     try {
-      const replaced = await page.evaluate((selector, adUrl, adSize, placementType, isVideoAd, playButtonSvg) => {
+      // Use the PLACEMENT size (detected slot size), not the client ad size
+      // This ensures the creative fills the actual ad slot on the page
+      const placementSize = placement.size;
+
+      const replaced = await page.evaluate((selector, adUrl, targetSize, placementType, isVideoAd, playButtonSvg) => {
         // Find the element
         let element = document.querySelector(selector);
 
@@ -557,25 +561,25 @@ export const replaceAds = async (page, matches) => {
           return { success: false, error: 'Element not found' };
         }
 
+        // Get the actual current dimensions of the element
+        const rect = element.getBoundingClientRect();
+        const actualWidth = Math.round(rect.width) || targetSize.width;
+        const actualHeight = Math.round(rect.height) || targetSize.height;
+
         try {
+          // Check if URL is an image (including base64 data URLs)
+          const isImageUrl = /\.(jpg|jpeg|png|gif|webp|svg)(\?.*)?$/i.test(adUrl) ||
+                             /^data:image\//i.test(adUrl);
+
           // Handle video ad replacements
           if (isVideoAd || placementType === 'video') {
-            const rect = element.getBoundingClientRect();
-            const width = adSize ? adSize.width : Math.round(rect.width);
-            const height = adSize ? adSize.height : Math.round(rect.height);
-
             // Create container for video thumbnail with play button overlay
             element.innerHTML = '';
-            element.style.width = `${width}px`;
-            element.style.height = `${height}px`;
+            element.style.width = `${actualWidth}px`;
+            element.style.height = `${actualHeight}px`;
             element.style.position = 'relative';
             element.style.overflow = 'hidden';
             element.style.backgroundColor = '#000';
-
-            // Check if URL is an image (thumbnail) or video
-            // Also check for base64 data URLs (used for DV360 extracted creatives)
-            const isImageUrl = /\.(jpg|jpeg|png|gif|webp|svg)(\?.*)?$/i.test(adUrl) ||
-                               /^data:image\//i.test(adUrl);
 
             if (isImageUrl) {
               // Use image as video thumbnail
@@ -608,27 +612,52 @@ export const replaceAds = async (page, matches) => {
             playButtonContainer.style.pointerEvents = 'none';
             element.appendChild(playButtonContainer);
 
-            return { success: true, isVideo: true };
+            return { success: true, isVideo: true, renderedSize: { width: actualWidth, height: actualHeight } };
           }
 
-          // Handle regular ad replacements (iframe or CSS)
+          // For ALL ad types (iframe or CSS), if the creative is an image, use img tag
+          // This handles DV360 extracted creatives correctly
+          if (isImageUrl) {
+            element.innerHTML = '';
+            element.style.width = `${actualWidth}px`;
+            element.style.height = `${actualHeight}px`;
+            element.style.overflow = 'hidden';
+            element.style.display = 'block';
+            element.style.position = 'relative';
+
+            const img = document.createElement('img');
+            img.src = adUrl;
+            img.style.width = '100%';
+            img.style.height = '100%';
+            img.style.objectFit = 'fill'; // Fill the entire container
+            img.style.display = 'block';
+            element.appendChild(img);
+
+            return { success: true, renderedSize: { width: actualWidth, height: actualHeight } };
+          }
+
+          // Handle non-image URLs (iframe sources)
           if (placementType === 'iframe') {
             // Replace iframe src
             if (element.tagName === 'IFRAME') {
               element.src = adUrl;
               element.style.border = 'none';
+              element.style.width = `${actualWidth}px`;
+              element.style.height = `${actualHeight}px`;
             } else {
               // Find iframe within the element
               const iframe = element.querySelector('iframe');
               if (iframe) {
                 iframe.src = adUrl;
                 iframe.style.border = 'none';
+                iframe.style.width = `${actualWidth}px`;
+                iframe.style.height = `${actualHeight}px`;
               } else {
                 // Create new iframe
                 const newIframe = document.createElement('iframe');
                 newIframe.src = adUrl;
-                newIframe.width = adSize.width;
-                newIframe.height = adSize.height;
+                newIframe.style.width = `${actualWidth}px`;
+                newIframe.style.height = `${actualHeight}px`;
                 newIframe.style.border = 'none';
                 newIframe.scrolling = 'no';
                 element.innerHTML = '';
@@ -636,54 +665,39 @@ export const replaceAds = async (page, matches) => {
               }
             }
           } else {
-            // CSS-based ad: replace with image
+            // CSS-based ad with non-image URL: create iframe
             element.innerHTML = '';
-            element.style.width = `${adSize.width}px`;
-            element.style.height = `${adSize.height}px`;
+            element.style.width = `${actualWidth}px`;
+            element.style.height = `${actualHeight}px`;
             element.style.overflow = 'hidden';
-            element.style.display = 'flex';
-            element.style.alignItems = 'center';
-            element.style.justifyContent = 'center';
 
-            // Check if URL is an image or iframe source
-            // Also check for base64 data URLs (used for DV360 extracted creatives)
-            const isImageUrl = /\.(jpg|jpeg|png|gif|webp|svg)(\?.*)?$/i.test(adUrl) ||
-                               /^data:image\//i.test(adUrl);
-
-            if (isImageUrl) {
-              const img = document.createElement('img');
-              img.src = adUrl;
-              img.style.maxWidth = '100%';
-              img.style.maxHeight = '100%';
-              img.style.objectFit = 'contain';
-              element.appendChild(img);
-            } else {
-              // Treat as iframe source
-              const iframe = document.createElement('iframe');
-              iframe.src = adUrl;
-              iframe.width = adSize.width;
-              iframe.height = adSize.height;
-              iframe.style.border = 'none';
-              iframe.scrolling = 'no';
-              element.appendChild(iframe);
-            }
+            const iframe = document.createElement('iframe');
+            iframe.src = adUrl;
+            iframe.style.width = '100%';
+            iframe.style.height = '100%';
+            iframe.style.border = 'none';
+            iframe.scrolling = 'no';
+            element.appendChild(iframe);
           }
 
-          return { success: true };
+          return { success: true, renderedSize: { width: actualWidth, height: actualHeight } };
         } catch (err) {
           return { success: false, error: err.message };
         }
-      }, placement.selector, clientAd.url, parseSize(clientAd.size), placement.type, isVideo, PLAY_BUTTON_SVG);
+      }, placement.selector, clientAd.url, placementSize, placement.type, isVideo, PLAY_BUTTON_SVG);
 
       if (replaced.success) {
+        const renderedSize = replaced.renderedSize || placementSize;
         results.successful.push({
           selector: placement.selector,
-          size: clientAd.size || placement.sizeString,
+          originalPlacementSize: placement.sizeString,
+          renderedSize: `${renderedSize.width}x${renderedSize.height}`,
+          clientAdSize: clientAd.size,
           url: clientAd.url,
           type: isVideo ? 'video' : placement.type,
           isVideo: replaced.isVideo || false
         });
-        console.log(`Replaced ${isVideo ? 'video ' : ''}ad at ${placement.selector} with ${clientAd.size || 'video'} creative`);
+        console.log(`Replaced ad at ${placement.selector}: placement ${placement.sizeString}, rendered ${renderedSize.width}x${renderedSize.height}`);
       } else {
         results.failed.push({
           selector: placement.selector,
