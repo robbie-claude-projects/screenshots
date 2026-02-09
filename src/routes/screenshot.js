@@ -2,6 +2,8 @@ import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs/promises';
+import { createReadStream, createWriteStream } from 'fs';
+import archiver from 'archiver';
 import { captureScreenshot } from '../services/puppeteerService.js';
 import { detectAds } from '../services/adDetection.js';
 import { processAdReplacement } from '../services/adReplacement.js';
@@ -264,6 +266,102 @@ router.post('/batch', async (req, res) => {
       error: 'Batch processing failed',
       details: error.message,
       results
+    });
+  }
+});
+
+// GET /api/screenshot/download/:jobId
+router.get('/download/:jobId', async (req, res) => {
+  const { jobId } = req.params;
+
+  // Validate job ID format
+  if (!jobId || !jobId.startsWith('job-')) {
+    return res.status(400).json({
+      success: false,
+      error: 'Invalid job ID',
+      details: 'Job ID must be in the format job-timestamp-randomstring'
+    });
+  }
+
+  try {
+    // Find all screenshots for this job
+    const files = await fs.readdir(SCREENSHOTS_DIR);
+    const jobFiles = files.filter(file => file.startsWith(jobId) && file.endsWith('.png'));
+
+    if (jobFiles.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'No screenshots found',
+        details: `No screenshots found for job ID: ${jobId}`
+      });
+    }
+
+    console.log(`Creating ZIP for job ${jobId} with ${jobFiles.length} file(s)`);
+
+    // Create ZIP filename
+    const zipFilename = `${jobId}-screenshots.zip`;
+    const zipPath = path.join(SCREENSHOTS_DIR, zipFilename);
+
+    // Create write stream for ZIP file
+    const output = createWriteStream(zipPath);
+    const archive = archiver('zip', {
+      zlib: { level: 9 } // Maximum compression
+    });
+
+    // Handle archive errors
+    archive.on('error', (err) => {
+      console.error(`ZIP creation error for ${jobId}:`, err.message);
+      throw err;
+    });
+
+    // Pipe archive to output file
+    archive.pipe(output);
+
+    // Add each screenshot to the archive
+    for (const file of jobFiles) {
+      const filePath = path.join(SCREENSHOTS_DIR, file);
+      archive.file(filePath, { name: file });
+    }
+
+    // Wait for archive to finalize
+    await new Promise((resolve, reject) => {
+      output.on('close', resolve);
+      output.on('error', reject);
+      archive.finalize();
+    });
+
+    console.log(`ZIP created: ${zipFilename} (${archive.pointer()} bytes)`);
+
+    // Send ZIP file for download
+    res.download(zipPath, zipFilename, async (err) => {
+      if (err) {
+        console.error(`Download error for ${jobId}:`, err.message);
+      }
+
+      // Clean up: delete ZIP file and screenshots after download
+      try {
+        // Delete ZIP file
+        await fs.unlink(zipPath);
+        console.log(`Cleaned up ZIP: ${zipFilename}`);
+
+        // Delete individual screenshots
+        for (const file of jobFiles) {
+          const filePath = path.join(SCREENSHOTS_DIR, file);
+          await fs.unlink(filePath);
+        }
+        console.log(`Cleaned up ${jobFiles.length} screenshot(s) for job ${jobId}`);
+      } catch (cleanupError) {
+        console.error(`Cleanup error for ${jobId}:`, cleanupError.message);
+      }
+    });
+  } catch (error) {
+    console.error(`Download failed for ${jobId}:`, error.message);
+
+    res.status(500).json({
+      success: false,
+      error: 'Failed to create download',
+      details: error.message,
+      timestamp: new Date().toISOString()
     });
   }
 });

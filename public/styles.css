@@ -467,3 +467,37 @@ footer {
   padding: 6px 12px;
   font-size: 0.85rem;
 }
+
+/* Download All section */
+.download-all-section {
+  margin-bottom: 20px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid #bbf7d0;
+}
+
+.download-all-btn {
+  display: block;
+  width: 100%;
+  padding: 14px 24px;
+  background: #166534;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  font-size: 1.1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.download-all-btn:hover {
+  background: #15803d;
+}
+
+.download-all-btn:active {
+  background: #14532d;
+}
+
+.download-all-btn:disabled {
+  background: #86efac;
+  cursor: not-allowed;
+}

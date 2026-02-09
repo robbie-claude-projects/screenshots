@@ -94,8 +94,40 @@ document.addEventListener('DOMContentLoaded', () => {
     resultsContent.innerHTML = html;
   };
 
+  // Download all screenshots as ZIP - exposed to window for onclick
+  window.downloadAllAsZip = async (jobId) => {
+    const downloadBtn = document.getElementById('download-all-btn');
+    const originalText = downloadBtn.textContent;
+
+    try {
+      downloadBtn.disabled = true;
+      downloadBtn.textContent = 'Preparing ZIP...';
+
+      // Trigger download via hidden link
+      const link = document.createElement('a');
+      link.href = `/api/screenshot/download/${jobId}`;
+      link.download = `${jobId}-screenshots.zip`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+
+      // Note: The download might take a moment, reset button after short delay
+      setTimeout(() => {
+        downloadBtn.disabled = false;
+        downloadBtn.textContent = originalText;
+      }, 2000);
+    } catch (error) {
+      console.error('Download failed:', error);
+      downloadBtn.disabled = false;
+      downloadBtn.textContent = 'Download Failed - Try Again';
+    }
+  };
+
   // Show batch results
   const showBatchResults = (data) => {
+    // Store jobId for download function
+    window.currentJobId = data.jobId;
+
     let html = `
       <div class="success-message">
         <h3>Batch Processing Complete</h3>
@@ -105,6 +137,13 @@ document.addEventListener('DOMContentLoaded', () => {
           <p><strong>Successful:</strong> ${data.successful}</p>
           <p><strong>Failed:</strong> ${data.failed}</p>
         </div>
+        ${data.successful > 0 ? `
+        <div class="download-all-section">
+          <button id="download-all-btn" class="download-all-btn" onclick="window.downloadAllAsZip('${data.jobId}')">
+            Download All as ZIP
+          </button>
+        </div>
+        ` : ''}
         <div class="batch-results">
           <h4>Results</h4>
           <div class="results-list">
