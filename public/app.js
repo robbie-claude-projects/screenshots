@@ -128,24 +128,48 @@ document.addEventListener('DOMContentLoaded', () => {
     // Store jobId for download function
     window.currentJobId = data.jobId;
 
+    // Calculate totals
+    const totalAdsDetected = data.results.reduce((sum, r) => sum + (r.detectedAds || 0), 0);
+    const totalAdsReplaced = data.results.reduce((sum, r) => sum + (r.adsReplaced || 0), 0);
+
     let html = `
       <div class="success-message">
         <h3>Batch Processing Complete</h3>
         <div class="batch-summary">
-          <p><strong>Job ID:</strong> ${data.jobId}</p>
-          <p><strong>Total URLs:</strong> ${data.totalUrls}</p>
-          <p><strong>Successful:</strong> ${data.successful}</p>
-          <p><strong>Failed:</strong> ${data.failed}</p>
+          <div class="summary-stats">
+            <div class="stat-item">
+              <span class="stat-value">${data.totalUrls}</span>
+              <span class="stat-label">URLs Processed</span>
+            </div>
+            <div class="stat-item success-stat">
+              <span class="stat-value">${data.successful}</span>
+              <span class="stat-label">Successful</span>
+            </div>
+            <div class="stat-item ${data.failed > 0 ? 'failed-stat' : ''}">
+              <span class="stat-value">${data.failed}</span>
+              <span class="stat-label">Failed</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-value">${totalAdsDetected}</span>
+              <span class="stat-label">Ads Detected</span>
+            </div>
+            <div class="stat-item">
+              <span class="stat-value">${totalAdsReplaced}</span>
+              <span class="stat-label">Ads Replaced</span>
+            </div>
+          </div>
+          <p class="job-id-info"><strong>Job ID:</strong> ${data.jobId}</p>
+          ${data.viewport ? `<p class="viewport-info"><strong>Viewport:</strong> ${data.viewport}</p>` : ''}
         </div>
         ${data.successful > 0 ? `
         <div class="download-all-section">
           <button id="download-all-btn" class="download-all-btn" onclick="window.downloadAllAsZip('${data.jobId}')">
-            Download All as ZIP
+            Download All as ZIP (includes metadata)
           </button>
         </div>
         ` : ''}
         <div class="batch-results">
-          <h4>Results</h4>
+          <h4>Screenshots</h4>
           <div class="results-list">
     `;
 

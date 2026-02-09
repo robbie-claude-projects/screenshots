@@ -380,9 +380,57 @@ footer {
 /* Batch results */
 .batch-summary {
   background: #ecfdf5;
-  padding: 16px;
-  border-radius: 6px;
+  padding: 20px;
+  border-radius: 8px;
   margin-bottom: 20px;
+}
+
+.summary-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.stat-item {
+  flex: 1;
+  min-width: 100px;
+  text-align: center;
+  padding: 12px;
+  background: #fff;
+  border-radius: 6px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.stat-value {
+  display: block;
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #1a1a2e;
+}
+
+.stat-label {
+  display: block;
+  font-size: 0.75rem;
+  color: #666;
+  margin-top: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.stat-item.success-stat .stat-value {
+  color: #22c55e;
+}
+
+.stat-item.failed-stat .stat-value {
+  color: #ef4444;
+}
+
+.job-id-info,
+.viewport-info {
+  margin: 4px 0;
+  color: #666;
+  font-size: 0.85rem;
 }
 
 .batch-summary p {

@@ -259,6 +259,35 @@ router.post('/batch', async (req, res) => {
 
     console.log(`[${jobId}] Batch complete: ${successCount} successful, ${failCount} failed`);
 
+    // Generate metadata for the job
+    const metadata = {
+      jobId,
+      timestamp: new Date().toISOString(),
+      viewport: normalizedViewport,
+      totalUrls: validUrls.length,
+      successful: successCount,
+      failed: failCount,
+      urlsProcessed: validUrls,
+      adCreativesUsed: validAdCreatives.map(ad => ({
+        url: ad.url,
+        size: ad.size,
+        type: ad.type || 'display'
+      })),
+      results: results.map(r => ({
+        url: r.url,
+        success: r.success,
+        filename: r.filename || null,
+        detectedAds: r.detectedAds || 0,
+        adsReplaced: r.adsReplaced || 0,
+        error: r.error || null
+      }))
+    };
+
+    // Save metadata to file
+    const metadataPath = path.join(SCREENSHOTS_DIR, `${jobId}-metadata.json`);
+    await fs.writeFile(metadataPath, JSON.stringify(metadata, null, 2));
+    console.log(`[${jobId}] Metadata saved: ${jobId}-metadata.json`);
+
     res.json({
       success: true,
       jobId,
@@ -299,6 +328,8 @@ router.get('/download/:jobId', async (req, res) => {
     // Find all screenshots for this job
     const files = await fs.readdir(SCREENSHOTS_DIR);
     const jobFiles = files.filter(file => file.startsWith(jobId) && file.endsWith('.png'));
+    const metadataFile = `${jobId}-metadata.json`;
+    const hasMetadata = files.includes(metadataFile);
 
     if (jobFiles.length === 0) {
       return res.status(404).json({
@@ -308,7 +339,7 @@ router.get('/download/:jobId', async (req, res) => {
       });
     }
 
-    console.log(`Creating ZIP for job ${jobId} with ${jobFiles.length} file(s)`);
+    console.log(`Creating ZIP for job ${jobId} with ${jobFiles.length} file(s)${hasMetadata ? ' + metadata' : ''}`);
 
     // Create ZIP filename
     const zipFilename = `${jobId}-screenshots.zip`;
@@ -335,6 +366,12 @@ router.get('/download/:jobId', async (req, res) => {
       archive.file(filePath, { name: file });
     }
 
+    // Add metadata.json if it exists
+    if (hasMetadata) {
+      const metadataPath = path.join(SCREENSHOTS_DIR, metadataFile);
+      archive.file(metadataPath, { name: 'metadata.json' });
+    }
+
     // Wait for archive to finalize
     await new Promise((resolve, reject) => {
       output.on('close', resolve);
@@ -350,7 +387,7 @@ router.get('/download/:jobId', async (req, res) => {
         console.error(`Download error for ${jobId}:`, err.message);
       }
 
-      // Clean up: delete ZIP file and screenshots after download
+      // Clean up: delete ZIP file, screenshots, and metadata after download
       try {
         // Delete ZIP file
         await fs.unlink(zipPath);
@@ -362,6 +399,13 @@ router.get('/download/:jobId', async (req, res) => {
           await fs.unlink(filePath);
         }
         console.log(`Cleaned up ${jobFiles.length} screenshot(s) for job ${jobId}`);
+
+        // Delete metadata file if it exists
+        if (hasMetadata) {
+          const metadataPath = path.join(SCREENSHOTS_DIR, metadataFile);
+          await fs.unlink(metadataPath);
+          console.log(`Cleaned up metadata for job ${jobId}`);
+        }
       } catch (cleanupError) {
         console.error(`Cleanup error for ${jobId}:`, cleanupError.message);
       }
