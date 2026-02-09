@@ -406,18 +406,85 @@ export const detectCSSAds = async (page) => {
       return classes.some(cls => adPatterns.some(pattern => pattern.test(cls)));
     };
 
-    // Helper to generate selector for element
-    const generateSelector = (element) => {
+    // Helper to generate a UNIQUE selector for element
+    const generateSelector = (element, index = 0) => {
+      // Strategy 1: Use ID if available (most reliable)
       if (element.id) {
-        return `#${element.id}`;
+        return `#${CSS.escape(element.id)}`;
       }
-      if (element.className && typeof element.className === 'string') {
-        const classes = element.className.split(' ').filter(c => c.trim());
-        if (classes.length > 0) {
-          return `.${classes[0]}`;
+
+      // Strategy 2: Use data attributes if available
+      const dataAttrs = Array.from(element.attributes)
+        .filter(attr => attr.name.startsWith('data-'))
+        .slice(0, 2);
+      if (dataAttrs.length > 0) {
+        const attrSelector = dataAttrs
+          .map(attr => `[${attr.name}="${CSS.escape(attr.value)}"]`)
+          .join('');
+        const matches = document.querySelectorAll(attrSelector);
+        if (matches.length === 1) {
+          return attrSelector;
         }
       }
-      return element.tagName.toLowerCase();
+
+      // Strategy 3: Build a path from parent with ID
+      let current = element;
+      let path = [];
+      while (current && current !== document.body) {
+        if (current.id) {
+          path.unshift(`#${CSS.escape(current.id)}`);
+          break;
+        }
+        // Get nth-child position
+        const parent = current.parentElement;
+        if (parent) {
+          const siblings = Array.from(parent.children);
+          const idx = siblings.indexOf(current) + 1;
+          const tag = current.tagName.toLowerCase();
+          path.unshift(`${tag}:nth-child(${idx})`);
+        }
+        current = current.parentElement;
+      }
+      if (path.length > 0 && path[0].startsWith('#')) {
+        // Found a parent with ID, use that path
+        const fullPath = path.join(' > ');
+        const matches = document.querySelectorAll(fullPath);
+        if (matches.length === 1) {
+          return fullPath;
+        }
+      }
+
+      // Strategy 4: Use class combination with nth-of-type
+      if (element.className && typeof element.className === 'string') {
+        const classes = element.className.split(' ').filter(c => c.trim() && !c.includes(':'));
+        if (classes.length > 0) {
+          const tag = element.tagName.toLowerCase();
+          const parent = element.parentElement;
+          if (parent) {
+            const sameClassSiblings = Array.from(parent.querySelectorAll(`:scope > ${tag}.${CSS.escape(classes[0])}`));
+            const idx = sameClassSiblings.indexOf(element) + 1;
+            if (idx > 0) {
+              const selector = `${tag}.${CSS.escape(classes[0])}:nth-of-type(${idx})`;
+              // Verify uniqueness from body
+              const fullSelector = parent.id
+                ? `#${CSS.escape(parent.id)} > ${selector}`
+                : selector;
+              return fullSelector;
+            }
+          }
+          return `.${CSS.escape(classes[0])}`;
+        }
+      }
+
+      // Strategy 5: Fallback to position-based selector
+      const rect = element.getBoundingClientRect();
+      return `[data-ad-position="${Math.round(rect.left)}-${Math.round(rect.top)}"]`;
+    };
+
+    // Helper to mark element with position data for fallback selection
+    const markElementPosition = (element) => {
+      const rect = element.getBoundingClientRect();
+      element.setAttribute('data-ad-position', `${Math.round(rect.left)}-${Math.round(rect.top)}`);
     };
 
     // Helper to get unique identifier for deduplication
@@ -439,8 +506,11 @@ export const detectCSSAds = async (page) => {
           const height = Math.round(rect.height);
 
           // Only include visible elements with reasonable dimensions
-          if (width >= 50 && height >= 50 && width <= 1000 && height <= 700) {
+          // Expanded limits to accommodate billboard (970x250) and larger formats
+          if (width >= 50 && height >= 50 && width <= 1200 && height <= 800) {
             processedElements.add(key);
+            // Mark element for position-based fallback selection
+            markElementPosition(element);
             results.push({
               selector: generateSelector(element),
               size: { width, height },
@@ -468,8 +538,11 @@ export const detectCSSAds = async (page) => {
         const height = Math.round(rect.height);
 
         // Only include visible elements with reasonable dimensions
-        if (width >= 50 && height >= 50 && width <= 1000 && height <= 700) {
+        // Expanded limits to accommodate billboard (970x250) and larger formats
+        if (width >= 50 && height >= 50 && width <= 1200 && height <= 800) {
           processedElements.add(key);
+          // Mark element for position-based fallback selection
+          markElementPosition(element);
           results.push({
             selector: generateSelector(element),
             size: { width, height },

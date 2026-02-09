@@ -546,7 +546,7 @@ export const replaceAds = async (page, matches) => {
       const placementSize = placement.size;
 
       const replaced = await page.evaluate((selector, adUrl, targetSize, placementType, isVideoAd, playButtonSvg) => {
-        // Find the element
+        // Find the element - try multiple strategies
         let element = document.querySelector(selector);
 
         if (!element) {
@@ -555,61 +555,72 @@ export const replaceAds = async (page, matches) => {
             const className = selector.substring(1);
             element = document.querySelector(`[class*="${className}"]`);
           }
+          // Try position-based fallback
+          if (!element && selector.includes('data-ad-position')) {
+            element = document.querySelector(selector);
+          }
         }
 
         if (!element) {
-          return { success: false, error: 'Element not found' };
+          return { success: false, error: `Element not found: ${selector}` };
         }
 
-        // Get the actual current dimensions of the element
+        // IMPORTANT: Get dimensions BEFORE any modifications
+        // Use the detected size (targetSize) as the authoritative size
         const rect = element.getBoundingClientRect();
-        const actualWidth = Math.round(rect.width) || targetSize.width;
-        const actualHeight = Math.round(rect.height) || targetSize.height;
+        const actualWidth = targetSize.width || Math.round(rect.width);
+        const actualHeight = targetSize.height || Math.round(rect.height);
+
+        // If dimensions are too small, something is wrong
+        if (actualWidth < 50 || actualHeight < 50) {
+          return { success: false, error: `Element too small: ${actualWidth}x${actualHeight}` };
+        }
 
         try {
           // Check if URL is an image (including base64 data URLs)
           const isImageUrl = /\.(jpg|jpeg|png|gif|webp|svg)(\?.*)?$/i.test(adUrl) ||
                              /^data:image\//i.test(adUrl);
 
+          // CRITICAL: Set explicit dimensions BEFORE clearing content
+          // This prevents the element from collapsing when we clear innerHTML
+          element.style.cssText = `
+            width: ${actualWidth}px !important;
+            height: ${actualHeight}px !important;
+            min-width: ${actualWidth}px !important;
+            min-height: ${actualHeight}px !important;
+            max-width: ${actualWidth}px !important;
+            max-height: ${actualHeight}px !important;
+            display: block !important;
+            overflow: hidden !important;
+          `;
+
           // Handle video ad replacements
           if (isVideoAd || placementType === 'video') {
-            // Create container for video thumbnail with play button overlay
+            // Now safe to clear content (dimensions already locked)
             element.innerHTML = '';
-            element.style.width = `${actualWidth}px`;
-            element.style.height = `${actualHeight}px`;
             element.style.position = 'relative';
-            element.style.overflow = 'hidden';
             element.style.backgroundColor = '#000';
 
             if (isImageUrl) {
               // Use image as video thumbnail
               const img = document.createElement('img');
               img.src = adUrl;
-              img.style.width = '100%';
-              img.style.height = '100%';
-              img.style.objectFit = 'cover';
+              img.style.cssText = 'width: 100%; height: 100%; object-fit: cover; display: block;';
               element.appendChild(img);
             } else {
               // For non-image URLs, create a dark background with the URL displayed
               const placeholder = document.createElement('div');
-              placeholder.style.width = '100%';
-              placeholder.style.height = '100%';
-              placeholder.style.backgroundColor = '#1a1a1a';
-              placeholder.style.backgroundImage = `url(${adUrl})`;
-              placeholder.style.backgroundSize = 'cover';
-              placeholder.style.backgroundPosition = 'center';
+              placeholder.style.cssText = `
+                width: 100%; height: 100%; background-color: #1a1a1a;
+                background-image: url(${adUrl}); background-size: cover; background-position: center;
+              `;
               element.appendChild(placeholder);
             }
 
             // Add play button overlay
             const playButtonContainer = document.createElement('div');
             playButtonContainer.innerHTML = playButtonSvg;
-            playButtonContainer.style.position = 'absolute';
-            playButtonContainer.style.top = '0';
-            playButtonContainer.style.left = '0';
-            playButtonContainer.style.width = '100%';
-            playButtonContainer.style.height = '100%';
-            playButtonContainer.style.pointerEvents = 'none';
+            playButtonContainer.style.cssText = 'position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none;';
             element.appendChild(playButtonContainer);
 
             return { success: true, isVideo: true, renderedSize: { width: actualWidth, height: actualHeight } };
@@ -618,19 +629,22 @@ export const replaceAds = async (page, matches) => {
           // For ALL ad types (iframe or CSS), if the creative is an image, use img tag
           // This handles DV360 extracted creatives correctly
           if (isImageUrl) {
+            // Clear content (dimensions already locked by cssText above)
             element.innerHTML = '';
-            element.style.width = `${actualWidth}px`;
-            element.style.height = `${actualHeight}px`;
-            element.style.overflow = 'hidden';
-            element.style.display = 'block';
             element.style.position = 'relative';
 
             const img = document.createElement('img');
             img.src = adUrl;
-            img.style.width = '100%';
-            img.style.height = '100%';
-            img.style.objectFit = 'fill'; // Fill the entire container
-            img.style.display = 'block';
+            // Use absolute positioning to ensure image fills the locked container
+            img.style.cssText = `
+              position: absolute;
+              top: 0;
+              left: 0;
+              width: 100%;
+              height: 100%;
+              object-fit: fill;
+              display: block;
+            `;
             element.appendChild(img);
 
             return { success: true, renderedSize: { width: actualWidth, height: actualHeight } };
