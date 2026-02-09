@@ -125,7 +125,16 @@ const COOKIE_CONSENT_SELECTORS = [
   // Quantcast
   '.qc-cmp2-summary-buttons button[mode="primary"]',
 
+  // Sourcepoint (used by Time Out and many others)
+  'button[title="Accept All & Continue"]',
+  'button[title*="Accept All"]',
+  'button[title*="Continue"]',
+  '.sp_choice_type_11',  // Sourcepoint accept all button class
+  '[data-choice-type="ACCEPT_ALL"]',
+
   // Generic text-based selectors (less reliable but useful fallback)
+  'button:has-text("Accept All & Continue")',
+  'button:has-text("Accept All and Continue")',
   'button:has-text("Accept All")',
   'button:has-text("Accept all")',
   'button:has-text("Accept")',
@@ -134,6 +143,9 @@ const COOKIE_CONSENT_SELECTORS = [
   'button:has-text("OK")',
   'button:has-text("Allow")',
   'button:has-text("Allow all")',
+  'button:has-text("Continue")',
+  'button:has-text("Got it")',
+  'button:has-text("I understand")',
 
   // Disney/ESPN specific (from the screenshot)
   '[data-testid="Confirm"]',
@@ -141,64 +153,147 @@ const COOKIE_CONSENT_SELECTORS = [
   'button[title="Accept All"]',
 ];
 
+// Helper to try clicking consent button in a frame (page or iframe)
+const tryClickConsentInFrame = async (frame, selector) => {
+  try {
+    // Check if selector uses :has-text (not native, need to handle differently)
+    if (selector.includes(':has-text')) {
+      const textMatch = selector.match(/:has-text\("(.+)"\)/);
+      if (textMatch) {
+        const buttonText = textMatch[1];
+        const clicked = await frame.evaluate((text) => {
+          const buttons = Array.from(document.querySelectorAll('button, a[role="button"], [role="button"], a'));
+          for (const btn of buttons) {
+            if (btn.innerText && btn.innerText.trim().toLowerCase().includes(text.toLowerCase())) {
+              const rect = btn.getBoundingClientRect();
+              // Check if button is visible
+              if (rect.width > 0 && rect.height > 0) {
+                btn.click();
+                return true;
+              }
+            }
+          }
+          return false;
+        }, buttonText);
+
+        if (clicked) {
+          return { clicked: true, method: `text match: "${buttonText}"` };
+        }
+      }
+      return { clicked: false };
+    }
+
+    // Try standard selector
+    const button = await frame.$(selector);
+    if (button) {
+      const isVisible = await frame.evaluate((el) => {
+        const rect = el.getBoundingClientRect();
+        const style = window.getComputedStyle(el);
+        return rect.width > 0 &&
+               rect.height > 0 &&
+               style.visibility !== 'hidden' &&
+               style.display !== 'none';
+      }, button);
+
+      if (isVisible) {
+        await button.click();
+        return { clicked: true, method: `selector: ${selector}` };
+      }
+    }
+  } catch {
+    // Selector didn't match or click failed
+  }
+  return { clicked: false };
+};
+
 // Attempt to dismiss cookie consent banners
 const dismissCookieConsent = async (page) => {
   try {
     // Wait a moment for cookie banners to appear
     await delay(1000);
 
+    // First try on the main page
     for (const selector of COOKIE_CONSENT_SELECTORS) {
+      const result = await tryClickConsentInFrame(page, selector);
+      if (result.clicked) {
+        console.log(`Cookie consent dismissed on main page using ${result.method}`);
+        await delay(500);
+        return true;
+      }
+    }
+
+    // If not found on main page, check iframes (many CMPs use iframes)
+    const frames = page.frames();
+    for (const frame of frames) {
+      // Skip the main frame (already checked)
+      if (frame === page.mainFrame()) continue;
+
       try {
-        // Check if selector uses :has-text (not native, need to handle differently)
-        if (selector.includes(':has-text')) {
-          const textMatch = selector.match(/:has-text\("(.+)"\)/);
-          if (textMatch) {
-            const buttonText = textMatch[1];
-            const clicked = await page.evaluate((text) => {
-              const buttons = Array.from(document.querySelectorAll('button, a[role="button"], [role="button"]'));
-              for (const btn of buttons) {
-                if (btn.innerText && btn.innerText.trim().toLowerCase().includes(text.toLowerCase())) {
+        // Check if frame is likely a consent iframe
+        const frameUrl = frame.url();
+        const isConsentFrame = frameUrl.includes('consent') ||
+                               frameUrl.includes('privacy') ||
+                               frameUrl.includes('cookie') ||
+                               frameUrl.includes('sp-') ||
+                               frameUrl.includes('sourcepoint') ||
+                               frameUrl.includes('onetrust') ||
+                               frameUrl.includes('cookiebot') ||
+                               frameUrl.includes('trustarc') ||
+                               frameUrl.includes('quantcast') ||
+                               frameUrl.includes('gdpr');
+
+        // Try all selectors in this frame
+        for (const selector of COOKIE_CONSENT_SELECTORS) {
+          const result = await tryClickConsentInFrame(frame, selector);
+          if (result.clicked) {
+            console.log(`Cookie consent dismissed in iframe using ${result.method}`);
+            await delay(500);
+            return true;
+          }
+        }
+
+        // If it looks like a consent frame but selectors didn't work,
+        // try a broader search for accept-like buttons
+        if (isConsentFrame) {
+          const clicked = await frame.evaluate(() => {
+            const acceptPatterns = [
+              /accept\s*all/i,
+              /accept.*continue/i,
+              /agree.*all/i,
+              /allow.*all/i,
+              /i\s*accept/i,
+              /i\s*agree/i,
+              /consent/i,
+              /continue/i
+            ];
+            const buttons = Array.from(document.querySelectorAll('button, a[role="button"], [role="button"], a'));
+            for (const btn of buttons) {
+              const text = btn.innerText?.trim() || '';
+              const title = btn.getAttribute('title') || '';
+              const ariaLabel = btn.getAttribute('aria-label') || '';
+              const combined = `${text} ${title} ${ariaLabel}`;
+
+              for (const pattern of acceptPatterns) {
+                if (pattern.test(combined)) {
                   const rect = btn.getBoundingClientRect();
-                  // Check if button is visible
                   if (rect.width > 0 && rect.height > 0) {
                     btn.click();
                     return true;
                   }
                 }
               }
-              return false;
-            }, buttonText);
-
-            if (clicked) {
-              console.log(`Cookie consent dismissed using text match: "${buttonText}"`);
-              await delay(500);
-              return true;
             }
-          }
-          continue;
-        }
+            return false;
+          });
 
-        // Try standard selector
-        const button = await page.$(selector);
-        if (button) {
-          const isVisible = await page.evaluate((el) => {
-            const rect = el.getBoundingClientRect();
-            const style = window.getComputedStyle(el);
-            return rect.width > 0 &&
-                   rect.height > 0 &&
-                   style.visibility !== 'hidden' &&
-                   style.display !== 'none';
-          }, button);
-
-          if (isVisible) {
-            await button.click();
-            console.log(`Cookie consent dismissed using selector: ${selector}`);
+          if (clicked) {
+            console.log('Cookie consent dismissed in consent iframe using pattern match');
             await delay(500);
             return true;
           }
         }
       } catch {
-        // Selector didn't match or click failed, try next
+        // Frame might have been detached or inaccessible
         continue;
       }
     }
