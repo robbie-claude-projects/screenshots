@@ -203,6 +203,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const viewport = formData.get('viewport') || 'desktop';
       const adCreativeUrls = formData.getAll('adCreatives[]');
       const adSizes = formData.getAll('adSizes[]');
+      const videoAdUrls = formData.getAll('videoAds[]');
 
       // Parse URLs
       const urls = urlsText.split('\n').map(u => u.trim()).filter(u => u !== '');
@@ -212,13 +213,25 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
       }
 
-      // Build ad creatives array
-      const adCreatives = adCreativeUrls
+      // Build regular ad creatives array
+      const regularAdCreatives = adCreativeUrls
         .map((url, index) => ({
           url: url.trim(),
-          size: adSizes[index]
+          size: adSizes[index],
+          type: 'display'
         }))
         .filter(ad => ad.url !== '');
+
+      // Build video ad creatives array
+      const videoAdCreatives = videoAdUrls
+        .map(url => ({
+          url: url.trim(),
+          type: 'video'
+        }))
+        .filter(ad => ad.url !== '');
+
+      // Combine all ad creatives
+      const adCreatives = [...regularAdCreatives, ...videoAdCreatives];
 
       // Determine if batch or single processing
       if (urls.length === 1) {

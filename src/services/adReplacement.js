@@ -1,7 +1,15 @@
 // Ad Replacement Module
 // Replaces detected ad placements with client ad creatives
 
-import { matchIABSize } from './adDetection.js';
+import { matchIABSize, matchVideoAspectRatio } from './adDetection.js';
+
+// SVG play button overlay for video ad placements
+const PLAY_BUTTON_SVG = `
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:80px;height:80px;opacity:0.9;pointer-events:none;">
+  <circle cx="50" cy="50" r="45" fill="rgba(0,0,0,0.6)" stroke="white" stroke-width="3"/>
+  <polygon points="40,30 40,70 75,50" fill="white"/>
+</svg>
+`;
 
 /**
  * Parse ad size string into width and height
@@ -72,9 +80,50 @@ export const matchAdsToplacements = (placements, clientAds) => {
 };
 
 /**
+ * Match video ads to video placements
+ * Video ads can match any video placement regardless of exact size
+ * @param {Array} placements - Detected video placements (type === 'video')
+ * @param {Array} videoAds - Video ads with { url, type: 'video' } properties
+ * @returns {Array} - Array of matches { placement, clientAd }
+ */
+export const matchVideoAdsToplacements = (placements, videoAds) => {
+  const matches = [];
+  const usedPlacements = new Set();
+
+  // Filter to only video placements
+  const videoPlacements = placements.filter(p => p.type === 'video');
+
+  // Sort video placements by size (largest first)
+  const sortedPlacements = [...videoPlacements].sort((a, b) => {
+    return (b.size.width * b.size.height) - (a.size.width * a.size.height);
+  });
+
+  for (const videoAd of videoAds) {
+    // Find a matching video placement
+    for (const placement of sortedPlacements) {
+      if (usedPlacements.has(placement.selector)) continue;
+
+      // Match if it's a video placement (already filtered) and has 16:9 aspect ratio
+      const aspectRatio = matchVideoAspectRatio(placement.size.width, placement.size.height);
+      if (aspectRatio === '16:9' || placement.subtype === 'native' || placement.subtype === 'iframe') {
+        matches.push({
+          placement,
+          clientAd: videoAd,
+          isVideo: true
+        });
+        usedPlacements.add(placement.selector);
+        break;
+      }
+    }
+  }
+
+  return matches;
+};
+
+/**
  * Replace ads on the page with client ad creatives
  * @param {object} page - Puppeteer page object
- * @param {Array} matches - Array of { placement, clientAd } matches
+ * @param {Array} matches - Array of { placement, clientAd, isVideo } matches
  * @returns {Promise<object>} - Results of replacement { successful, failed }
  */
 export const replaceAds = async (page, matches) => {
@@ -84,10 +133,10 @@ export const replaceAds = async (page, matches) => {
   };
 
   for (const match of matches) {
-    const { placement, clientAd } = match;
+    const { placement, clientAd, isVideo = false } = match;
 
     try {
-      const replaced = await page.evaluate((selector, adUrl, adSize, placementType) => {
+      const replaced = await page.evaluate((selector, adUrl, adSize, placementType, isVideoAd, playButtonSvg) => {
         // Find the element
         let element = document.querySelector(selector);
 
@@ -104,6 +153,58 @@ export const replaceAds = async (page, matches) => {
         }
 
         try {
+          // Handle video ad replacements
+          if (isVideoAd || placementType === 'video') {
+            const rect = element.getBoundingClientRect();
+            const width = adSize ? adSize.width : Math.round(rect.width);
+            const height = adSize ? adSize.height : Math.round(rect.height);
+
+            // Create container for video thumbnail with play button overlay
+            element.innerHTML = '';
+            element.style.width = `${width}px`;
+            element.style.height = `${height}px`;
+            element.style.position = 'relative';
+            element.style.overflow = 'hidden';
+            element.style.backgroundColor = '#000';
+
+            // Check if URL is an image (thumbnail) or video
+            const isImageUrl = /\.(jpg|jpeg|png|gif|webp|svg)(\?.*)?$/i.test(adUrl);
+
+            if (isImageUrl) {
+              // Use image as video thumbnail
+              const img = document.createElement('img');
+              img.src = adUrl;
+              img.style.width = '100%';
+              img.style.height = '100%';
+              img.style.objectFit = 'cover';
+              element.appendChild(img);
+            } else {
+              // For non-image URLs, create a dark background with the URL displayed
+              const placeholder = document.createElement('div');
+              placeholder.style.width = '100%';
+              placeholder.style.height = '100%';
+              placeholder.style.backgroundColor = '#1a1a1a';
+              placeholder.style.backgroundImage = `url(${adUrl})`;
+              placeholder.style.backgroundSize = 'cover';
+              placeholder.style.backgroundPosition = 'center';
+              element.appendChild(placeholder);
+            }
+
+            // Add play button overlay
+            const playButtonContainer = document.createElement('div');
+            playButtonContainer.innerHTML = playButtonSvg;
+            playButtonContainer.style.position = 'absolute';
+            playButtonContainer.style.top = '0';
+            playButtonContainer.style.left = '0';
+            playButtonContainer.style.width = '100%';
+            playButtonContainer.style.height = '100%';
+            playButtonContainer.style.pointerEvents = 'none';
+            element.appendChild(playButtonContainer);
+
+            return { success: true, isVideo: true };
+          }
+
+          // Handle regular ad replacements (iframe or CSS)
           if (placementType === 'iframe') {
             // Replace iframe src
             if (element.tagName === 'IFRAME') {
@@ -163,20 +264,21 @@ export const replaceAds = async (page, matches) => {
         } catch (err) {
           return { success: false, error: err.message };
         }
-      }, placement.selector, clientAd.url, parseSize(clientAd.size), placement.type);
+      }, placement.selector, clientAd.url, parseSize(clientAd.size), placement.type, isVideo, PLAY_BUTTON_SVG);
 
       if (replaced.success) {
         results.successful.push({
           selector: placement.selector,
-          size: clientAd.size,
+          size: clientAd.size || placement.sizeString,
           url: clientAd.url,
-          type: placement.type
+          type: isVideo ? 'video' : placement.type,
+          isVideo: replaced.isVideo || false
         });
-        console.log(`Replaced ad at ${placement.selector} with ${clientAd.size} creative`);
+        console.log(`Replaced ${isVideo ? 'video ' : ''}ad at ${placement.selector} with ${clientAd.size || 'video'} creative`);
       } else {
         results.failed.push({
           selector: placement.selector,
-          size: clientAd.size,
+          size: clientAd.size || placement.sizeString,
           url: clientAd.url,
           error: replaced.error
         });
@@ -185,7 +287,7 @@ export const replaceAds = async (page, matches) => {
     } catch (error) {
       results.failed.push({
         selector: placement.selector,
-        size: clientAd.size,
+        size: clientAd.size || placement.sizeString,
         url: clientAd.url,
         error: error.message
       });
@@ -217,7 +319,7 @@ export const waitForAdsToLoad = async (page, delayMs = 3000) => {
  * Process ad replacement workflow
  * @param {object} page - Puppeteer page object
  * @param {Array} placements - Detected ad placements
- * @param {Array} clientAds - Client ads with { url, size } properties
+ * @param {Array} clientAds - Client ads with { url, size, type } properties
  * @returns {Promise<object>} - Replacement results
  */
 export const processAdReplacement = async (page, placements, clientAds) => {
@@ -234,26 +336,41 @@ export const processAdReplacement = async (page, placements, clientAds) => {
     return { successful: [], failed: [], matches: [] };
   }
 
-  // Match ads to placements
-  const matches = matchAdsToplacements(placements, validClientAds);
-  console.log(`Matched ${matches.length} client ads to placements`);
+  // Separate regular ads from video ads
+  const regularAds = validClientAds.filter(ad => ad.type !== 'video');
+  const videoAds = validClientAds.filter(ad => ad.type === 'video');
 
-  if (matches.length === 0) {
-    console.log('No size matches found between client ads and detected placements');
+  // Separate regular placements from video placements
+  const regularPlacements = placements.filter(p => p.type !== 'video');
+  const videoPlacements = placements.filter(p => p.type === 'video');
+
+  // Match regular ads to placements
+  const regularMatches = matchAdsToplacements(regularPlacements, regularAds);
+  console.log(`Matched ${regularMatches.length} regular ads to placements`);
+
+  // Match video ads to video placements
+  const videoMatches = matchVideoAdsToplacements(videoPlacements, videoAds);
+  console.log(`Matched ${videoMatches.length} video ads to video placements`);
+
+  const allMatches = [...regularMatches, ...videoMatches];
+
+  if (allMatches.length === 0) {
+    console.log('No matches found between client ads and detected placements');
     return { successful: [], failed: [], matches: [] };
   }
 
   // Replace ads
-  const results = await replaceAds(page, matches);
+  const results = await replaceAds(page, allMatches);
 
   // Wait for new ads to load
   await waitForAdsToLoad(page);
 
   return {
     ...results,
-    matches: matches.map(m => ({
+    matches: allMatches.map(m => ({
       placement: m.placement.selector,
-      clientAd: { url: m.clientAd.url, size: m.clientAd.size }
+      clientAd: { url: m.clientAd.url, size: m.clientAd.size, type: m.clientAd.type },
+      isVideo: m.isVideo || false
     }))
   };
 };
@@ -261,6 +378,7 @@ export const processAdReplacement = async (page, placements, clientAds) => {
 export default {
   parseSize,
   matchAdsToplacements,
+  matchVideoAdsToplacements,
   replaceAds,
   waitForAdsToLoad,
   processAdReplacement
