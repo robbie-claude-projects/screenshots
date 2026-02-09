@@ -41,9 +41,44 @@ const generateFilename = (viewportName = 'desktop') => {
   return `screenshot-${viewportName}-${timestamp}.png`;
 };
 
+// Convert custom selectors to placement format for ad replacement
+const customSelectorsToplacements = async (page, selectors) => {
+  return page.evaluate((sels) => {
+    const placements = [];
+
+    sels.forEach((selector, index) => {
+      try {
+        const elements = document.querySelectorAll(selector);
+        elements.forEach((el, elIndex) => {
+          const rect = el.getBoundingClientRect();
+          const width = Math.round(rect.width);
+          const height = Math.round(rect.height);
+
+          if (width > 0 && height > 0) {
+            placements.push({
+              selector: `${selector}:nth-of-type(${elIndex + 1})`,
+              originalSelector: selector,
+              width,
+              height,
+              sizeString: `${width}x${height}`,
+              type: 'custom',
+              element: el.tagName.toLowerCase(),
+              index: placements.length
+            });
+          }
+        });
+      } catch (e) {
+        console.error(`Invalid selector: ${selector}`, e);
+      }
+    });
+
+    return placements;
+  }, selectors);
+};
+
 // POST /api/screenshot
 router.post('/', async (req, res) => {
-  const { url, adCreatives = [], viewport: viewportName = 'desktop' } = req.body;
+  const { url, adCreatives = [], viewport: viewportName = 'desktop', customSelectors = [] } = req.body;
 
   // Validate URL using validation utility
   const urlValidation = validateUrl(url);
@@ -75,7 +110,16 @@ router.post('/', async (req, res) => {
     const filename = generateFilename(normalizedViewport);
     const outputPath = path.join(SCREENSHOTS_DIR, filename);
 
+    // Parse and validate custom selectors
+    const validCustomSelectors = Array.isArray(customSelectors)
+      ? customSelectors.filter(s => typeof s === 'string' && s.trim() !== '')
+      : [];
+    const useCustomSelectors = validCustomSelectors.length > 0;
+
     console.log(`Capturing screenshot of: ${url} (viewport: ${normalizedViewport})`);
+    if (useCustomSelectors) {
+      console.log(`Using ${validCustomSelectors.length} custom selector(s)`);
+    }
     if (validAdCreatives.length > 0) {
       console.log(`With ${validAdCreatives.length} ad creative(s) to replace`);
     }
@@ -85,15 +129,24 @@ router.post('/', async (req, res) => {
     let replacementResults = null;
 
     const beforeCapture = async (page) => {
-      // Detect ads on page
-      detectedAds = await detectAds(page);
+      // Use custom selectors or auto-detect
+      if (useCustomSelectors) {
+        console.log('Using custom selectors (skipping auto-detection)');
+        detectedAds = await customSelectorsToplacements(page, validCustomSelectors);
+        console.log(`Found ${detectedAds.length} element(s) matching custom selectors`);
+      } else {
+        // Detect ads on page
+        detectedAds = await detectAds(page);
+      }
 
       if (detectedAds.length > 0) {
-        const iframeCount = detectedAds.filter(ad => ad.type === 'iframe').length;
-        const cssCount = detectedAds.filter(ad => ad.type === 'css').length;
-        console.log(`Detected ${detectedAds.length} ad placement(s): ${iframeCount} iframe, ${cssCount} CSS`);
+        if (!useCustomSelectors) {
+          const iframeCount = detectedAds.filter(ad => ad.type === 'iframe').length;
+          const cssCount = detectedAds.filter(ad => ad.type === 'css').length;
+          console.log(`Detected ${detectedAds.length} ad placement(s): ${iframeCount} iframe, ${cssCount} CSS`);
+        }
         detectedAds.forEach((ad, index) => {
-          console.log(`  ${index + 1}. ${ad.sizeString} (${ad.iabSize || 'non-standard'}) - ${ad.type}`);
+          console.log(`  ${index + 1}. ${ad.sizeString} (${ad.iabSize || ad.type}) - ${ad.type}`);
         });
 
         // Replace ads if client ads were provided
@@ -103,7 +156,7 @@ router.post('/', async (req, res) => {
           console.log(`Replacement complete: ${replacementResults.successful.length} successful, ${replacementResults.failed.length} failed`);
         }
       } else {
-        console.log('No ad placements detected');
+        console.log(useCustomSelectors ? 'No elements matched custom selectors' : 'No ad placements detected');
       }
 
       return { detectedAds, replacementResults };
@@ -153,7 +206,7 @@ const generateJobId = () => {
 
 // POST /api/batch-screenshot
 router.post('/batch', async (req, res) => {
-  const { urls = [], adCreatives = [], viewport: viewportName = 'desktop' } = req.body;
+  const { urls = [], adCreatives = [], viewport: viewportName = 'desktop', customSelectors = [] } = req.body;
 
   // Validate URLs array
   if (!Array.isArray(urls) || urls.length === 0) {
@@ -200,10 +253,19 @@ router.post('/batch', async (req, res) => {
     console.log(`Warning: ${adValidation.invalid.length} invalid ad creative(s) skipped`);
   }
 
+  // Parse and validate custom selectors
+  const validCustomSelectors = Array.isArray(customSelectors)
+    ? customSelectors.filter(s => typeof s === 'string' && s.trim() !== '')
+    : [];
+  const useCustomSelectors = validCustomSelectors.length > 0;
+
   const jobId = generateJobId();
   const results = [];
 
   console.log(`Starting batch job ${jobId} with ${validUrls.length} URL(s) (viewport: ${normalizedViewport})`);
+  if (useCustomSelectors) {
+    console.log(`Using ${validCustomSelectors.length} custom selector(s)`);
+  }
 
   try {
     await ensureScreenshotsDir();
@@ -224,7 +286,12 @@ router.post('/batch', async (req, res) => {
         let replacementResults = null;
 
         const beforeCapture = async (page) => {
-          detectedAds = await detectAds(page);
+          // Use custom selectors or auto-detect
+          if (useCustomSelectors) {
+            detectedAds = await customSelectorsToplacements(page, validCustomSelectors);
+          } else {
+            detectedAds = await detectAds(page);
+          }
 
           if (detectedAds.length > 0 && validAdCreatives.length > 0) {
             replacementResults = await processAdReplacement(page, detectedAds, validAdCreatives);
@@ -274,6 +341,7 @@ router.post('/batch', async (req, res) => {
         size: ad.size,
         type: ad.type || 'display'
       })),
+      customSelectors: useCustomSelectors ? validCustomSelectors : null,
       results: results.map(r => ({
         url: r.url,
         success: r.success,

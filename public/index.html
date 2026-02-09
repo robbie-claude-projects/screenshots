@@ -122,6 +122,40 @@
           </div>
         </section>
 
+        <section class="form-section advanced-section">
+          <details class="advanced-options">
+            <summary>Advanced Options</summary>
+            <div class="advanced-content">
+              <div class="checkbox-group">
+                <input type="checkbox" id="manual-selectors" name="useCustomSelectors">
+                <label for="manual-selectors">Use custom CSS selectors (skip auto-detection)</label>
+              </div>
+
+              <div id="custom-selectors-group" class="selector-input-group hidden">
+                <label for="custom-selectors">Custom CSS Selectors</label>
+                <p class="help-text">
+                  Enter CSS selectors for ad placements (one per line). The tool will inject your ad creatives into these elements.
+                </p>
+                <textarea
+                  id="custom-selectors"
+                  name="customSelectors"
+                  rows="4"
+                  placeholder="#sidebar .ad-slot&#10;.header-banner&#10;[data-ad-unit='leaderboard']"
+                ></textarea>
+                <div class="selector-help">
+                  <strong>Selector format examples:</strong>
+                  <ul>
+                    <li><code>#ad-container</code> - Element with ID "ad-container"</li>
+                    <li><code>.advertisement</code> - Elements with class "advertisement"</li>
+                    <li><code>[data-ad-slot]</code> - Elements with data-ad-slot attribute</li>
+                    <li><code>iframe[src*="ads"]</code> - Iframes with "ads" in src</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+          </details>
+        </section>
+
         <section class="form-section">
           <button type="submit" class="submit-btn">
             Generate Screenshots

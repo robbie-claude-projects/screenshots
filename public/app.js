@@ -5,6 +5,17 @@ document.addEventListener('DOMContentLoaded', () => {
   const resultsSection = document.getElementById('results');
   const resultsContent = document.getElementById('results-content');
   const submitBtn = form.querySelector('.submit-btn');
+  const manualSelectorsCheckbox = document.getElementById('manual-selectors');
+  const customSelectorsGroup = document.getElementById('custom-selectors-group');
+
+  // Toggle custom selectors visibility
+  manualSelectorsCheckbox.addEventListener('change', () => {
+    if (manualSelectorsCheckbox.checked) {
+      customSelectorsGroup.classList.remove('hidden');
+    } else {
+      customSelectorsGroup.classList.add('hidden');
+    }
+  });
 
   // Show loading state for single URL
   const showLoading = (message = 'Capturing screenshot and detecting ads...') => {
@@ -228,6 +239,13 @@ document.addEventListener('DOMContentLoaded', () => {
       const adCreativeUrls = formData.getAll('adCreatives[]');
       const adSizes = formData.getAll('adSizes[]');
       const videoAdUrls = formData.getAll('videoAds[]');
+      const useCustomSelectors = formData.get('useCustomSelectors') === 'on';
+      const customSelectorsText = formData.get('customSelectors') || '';
+
+      // Parse custom selectors if enabled
+      const customSelectors = useCustomSelectors
+        ? customSelectorsText.split('\n').map(s => s.trim()).filter(s => s !== '')
+        : [];
 
       // Parse URLs
       const urls = urlsText.split('\n').map(u => u.trim()).filter(u => u !== '');
@@ -270,7 +288,8 @@ document.addEventListener('DOMContentLoaded', () => {
           body: JSON.stringify({
             url: urls[0],
             viewport,
-            adCreatives
+            adCreatives,
+            customSelectors: customSelectors.length > 0 ? customSelectors : undefined
           })
         });
 
@@ -293,7 +312,8 @@ document.addEventListener('DOMContentLoaded', () => {
           body: JSON.stringify({
             urls,
             viewport,
-            adCreatives
+            adCreatives,
+            customSelectors: customSelectors.length > 0 ? customSelectors : undefined
           })
         });
 
