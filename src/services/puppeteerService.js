@@ -86,15 +86,15 @@ const isRetryableError = (error) => {
 // Delay helper
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-// CSS to hide common cookie consent banners and overlays
+// CSS to hide ONLY specific known cookie consent banners (not generic patterns)
+// This is applied AFTER consent is dismissed, not before
 const COOKIE_BANNER_HIDE_CSS = `
-  /* OneTrust */
+  /* OneTrust - specific containers only */
   #onetrust-consent-sdk,
   #onetrust-banner-sdk,
   .onetrust-pc-dark-filter,
-  .ot-fade-in,
 
-  /* Cookiebot */
+  /* Cookiebot - specific containers only */
   #CybotCookiebotDialog,
   #CybotCookiebotDialogBodyUnderlay,
 
@@ -107,72 +107,23 @@ const COOKIE_BANNER_HIDE_CSS = `
   .qc-cmp2-container,
   #qc-cmp2-container,
 
-  /* Sourcepoint */
-  div[class*="sp_message_container"],
-  .sp-message-open,
-  div[data-sp-message],
+  /* Sourcepoint - specific container */
+  div[id^="sp_message_container"],
 
   /* Didomi */
   #didomi-host,
-  .didomi-popup-container,
 
-  /* Generic cookie banner patterns */
-  [class*="cookie-banner"],
-  [class*="cookie-consent"],
-  [class*="cookie-notice"],
-  [class*="cookie-popup"],
-  [class*="cookie-modal"],
-  [class*="cookie-overlay"],
-  [class*="gdpr-banner"],
-  [class*="gdpr-consent"],
-  [class*="gdpr-popup"],
-  [class*="privacy-banner"],
-  [class*="privacy-consent"],
-  [class*="privacy-popup"],
-  [class*="consent-banner"],
-  [class*="consent-modal"],
-  [class*="consent-popup"],
-  [class*="consent-overlay"],
-  [id*="cookie-banner"],
-  [id*="cookie-consent"],
-  [id*="cookie-notice"],
-  [id*="cookie-popup"],
-  [id*="gdpr-banner"],
-  [id*="gdpr-consent"],
-  [id*="privacy-banner"],
-  [id*="consent-banner"],
-  [id*="consent-modal"],
-
-  /* Common modal/overlay patterns that might be consent related */
-  .cc-window,
-  .cc-banner,
-  .cc-overlay,
-  #cc-main,
-  .js-cookie-consent,
-  .cookie-law-info-bar,
-  .cli-modal,
-  .eupopup,
-  .eu-cookie-bar,
-  .cc_banner,
-  .cc_container,
-
-  /* Overlay backdrops */
-  [class*="cookie"][class*="overlay"],
-  [class*="consent"][class*="overlay"],
-  [class*="gdpr"][class*="overlay"],
-  [class*="privacy"][class*="backdrop"],
-  [class*="consent"][class*="backdrop"] {
+  /* Cookie Control */
+  #ccc,
+  #ccc-overlay {
     display: none !important;
     visibility: hidden !important;
-    opacity: 0 !important;
-    pointer-events: none !important;
   }
 
-  /* Remove body scroll lock that consent managers often add */
+  /* Remove body scroll lock */
   body.sp-message-open,
   body.didomi-popup-open,
-  body.cookie-consent-open,
-  body.modal-open {
+  body.ccc-open {
     overflow: auto !important;
     position: static !important;
   }
@@ -248,28 +199,23 @@ const injectCookieBannerHideCSS = async (page) => {
   }
 };
 
-// Remove cookie banner elements from DOM
+// Remove cookie banner elements from DOM - only specific known CMP containers
 const removeCookieBannerElements = async (page) => {
   try {
     const removedCount = await page.evaluate(() => {
       let count = 0;
+      // Only remove specific known CMP containers - NOT generic patterns
       const selectorsToRemove = [
         '#onetrust-consent-sdk',
         '#CybotCookiebotDialog',
+        '#CybotCookiebotDialogBodyUnderlay',
         '.qc-cmp2-container',
         '#qc-cmp2-container',
         '#didomi-host',
-        'div[class*="sp_message_container"]',
-        '[class*="cookie-banner"]',
-        '[class*="cookie-consent"]',
-        '[class*="cookie-notice"]',
-        '[class*="cookie-popup"]',
-        '[class*="gdpr-banner"]',
-        '[class*="consent-banner"]',
-        '[class*="consent-modal"]',
-        '.cc-window',
-        '.cc-banner',
-        '#cc-main'
+        '#truste-consent-track',
+        '.truste_overlay',
+        '#ccc',
+        '#ccc-overlay'
       ];
 
       selectorsToRemove.forEach(selector => {
@@ -284,38 +230,17 @@ const removeCookieBannerElements = async (page) => {
         }
       });
 
-      // Also remove fixed/sticky overlays that look like consent dialogs
-      const allElements = document.querySelectorAll('div, aside, section');
-      allElements.forEach(el => {
-        const style = window.getComputedStyle(el);
-        const isFixedOrSticky = style.position === 'fixed' || style.position === 'sticky';
-        const hasHighZIndex = parseInt(style.zIndex) > 999;
-        const coversScreen = el.offsetWidth > window.innerWidth * 0.5 ||
-                             el.offsetHeight > window.innerHeight * 0.3;
-
-        if (isFixedOrSticky && hasHighZIndex) {
-          const text = el.innerText?.toLowerCase() || '';
-          const hasCookieText = text.includes('cookie') ||
-                                text.includes('consent') ||
-                                text.includes('privacy') ||
-                                text.includes('gdpr') ||
-                                text.includes('accept') ||
-                                text.includes('agree');
-          if (hasCookieText && coversScreen) {
-            el.remove();
-            count++;
-          }
-        }
+      // Remove Sourcepoint containers (they have dynamic IDs)
+      document.querySelectorAll('div[id^="sp_message_container"]').forEach(el => {
+        el.remove();
+        count++;
       });
 
       // Remove body classes that lock scrolling
       document.body.classList.remove(
         'sp-message-open',
         'didomi-popup-open',
-        'cookie-consent-open',
-        'modal-open',
-        'no-scroll',
-        'overflow-hidden'
+        'ccc-open'
       );
       document.body.style.overflow = '';
       document.body.style.position = '';
@@ -414,20 +339,19 @@ const dismissCookieConsent = async (page) => {
   let dismissed = false;
 
   try {
-    // Step 1: Inject CSS to hide banners immediately
-    await injectCookieBannerHideCSS(page);
+    // Step 1: Wait for cookie banners to appear (they often load async)
+    // Don't inject CSS yet - we need buttons to be visible for clicking
+    await delay(1500);
 
-    // Step 2: Wait for cookie banners to appear (they often load async)
-    await delay(2000);
-
-    // Step 3: Try clicking on main page
+    // Step 2: Try clicking on main page first
     const mainResult = await tryClickConsentInFrame(page);
     if (mainResult.clicked) {
       console.log(`Cookie consent dismissed on main page using ${mainResult.method}`);
       dismissed = true;
+      await delay(1000); // Wait for banner to dismiss
     }
 
-    // Step 4: Check ALL iframes (not just consent-related URLs)
+    // Step 3: Check ALL iframes (not just consent-related URLs)
     if (!dismissed) {
       const frames = page.frames();
       for (const frame of frames) {
@@ -438,6 +362,7 @@ const dismissCookieConsent = async (page) => {
           if (frameResult.clicked) {
             console.log(`Cookie consent dismissed in iframe using ${frameResult.method}`);
             dismissed = true;
+            await delay(1000); // Wait for banner to dismiss
             break;
           }
         } catch {
@@ -446,31 +371,46 @@ const dismissCookieConsent = async (page) => {
       }
     }
 
-    // Step 5: Remove any remaining cookie banner elements from DOM
-    await delay(500);
-    await removeCookieBannerElements(page);
-
-    // Step 6: Re-inject CSS in case page modified styles
-    await injectCookieBannerHideCSS(page);
-
-    // Step 7: Final cleanup - try again after a delay (some banners appear late)
+    // Step 4: If not dismissed yet, wait and try again (late-loading banners)
     if (!dismissed) {
-      await delay(1000);
+      await delay(1500);
       const retryResult = await tryClickConsentInFrame(page);
       if (retryResult.clicked) {
         console.log(`Cookie consent dismissed on retry using ${retryResult.method}`);
         dismissed = true;
+        await delay(1000);
+      }
+
+      // Try iframes again
+      if (!dismissed) {
+        const frames = page.frames();
+        for (const frame of frames) {
+          if (frame === page.mainFrame()) continue;
+          try {
+            const frameResult = await tryClickConsentInFrame(frame);
+            if (frameResult.clicked) {
+              console.log(`Cookie consent dismissed in iframe on retry using ${frameResult.method}`);
+              dismissed = true;
+              await delay(1000);
+              break;
+            }
+          } catch {
+            continue;
+          }
+        }
       }
     }
 
-    // Final DOM cleanup
-    await removeCookieBannerElements(page);
+    // Step 5: ONLY after attempting to dismiss, inject CSS and remove elements
+    // This ensures we don't hide buttons we need to click
+    if (dismissed) {
+      await injectCookieBannerHideCSS(page);
+      await removeCookieBannerElements(page);
+    }
 
     return dismissed;
   } catch (error) {
     console.warn('Error during cookie consent dismissal:', error.message);
-    // Still try to remove elements even if clicking failed
-    await removeCookieBannerElements(page);
     return dismissed;
   }
 };
@@ -507,6 +447,25 @@ const navigateWithRetry = async (page, url, maxRetries = 1, retryDelayMs = 5000)
   throw lastError;
 };
 
+// Wait for page to have visible content
+const waitForPageContent = async (page, timeout = 10000) => {
+  try {
+    // Wait for body to exist and have content
+    await page.waitForFunction(() => {
+      const body = document.body;
+      if (!body) return false;
+      // Check that body has some visible content
+      const hasContent = body.innerText.trim().length > 100 ||
+                        body.querySelectorAll('img, video, canvas').length > 0;
+      return hasContent;
+    }, { timeout });
+    return true;
+  } catch {
+    console.warn('Timeout waiting for page content, proceeding anyway');
+    return false;
+  }
+};
+
 export const captureScreenshot = async (url, outputPath, options = {}) => {
   const browser = await getBrowser();
   const page = await browser.newPage();
@@ -528,14 +487,17 @@ export const captureScreenshot = async (url, outputPath, options = {}) => {
     // Navigate with retry logic for network failures
     await navigateWithRetry(page, url, options.maxRetries || 1, options.retryDelayMs || 5000);
 
-    // Wait for page to fully settle (ads and dynamic content to load)
-    await delay(2000);
+    // Wait for page to have actual visible content
+    await waitForPageContent(page, 15000);
 
-    // Attempt to dismiss cookie consent banners (comprehensive approach)
+    // Additional wait for dynamic content and ads to load
+    await delay(3000);
+
+    // Attempt to dismiss cookie consent banners
     await dismissCookieConsent(page);
 
-    // Additional wait after cookie dismissal for page to stabilize
-    await delay(1000);
+    // Wait for page to stabilize after cookie dismissal
+    await delay(2000);
 
     // Run beforeCapture callback if provided (for ad detection/replacement)
     let callbackResult = null;
@@ -544,9 +506,9 @@ export const captureScreenshot = async (url, outputPath, options = {}) => {
     }
 
     // Wait for ad replacements to render
-    await delay(1500);
+    await delay(2000);
 
-    // Final cookie banner cleanup before screenshot
+    // Final cleanup - only remove specific known CMP containers
     await removeCookieBannerElements(page);
 
     await page.screenshot({
