@@ -1,0 +1,42 @@
+version: '3.8'
+
+services:
+  ad-placement-tool:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ad-placement-tool
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      - NODE_ENV=${NODE_ENV:-production}
+      - PORT=3000
+      - MAX_CONCURRENT=${MAX_CONCURRENT:-3}
+      - TIMEOUT_MS=${TIMEOUT_MS:-60000}
+      - CLEANUP_HOURS=${CLEANUP_HOURS:-24}
+      - ENABLE_AUTO_CLEANUP=${ENABLE_AUTO_CLEANUP:-true}
+    volumes:
+      - screenshots_data:/app/screenshots
+    restart: unless-stopped
+    # Security options for Puppeteer
+    security_opt:
+      - no-new-privileges:true
+    cap_add:
+      - SYS_ADMIN
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 512M
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000', (r) => process.exit(r.statusCode === 200 ? 0 : 1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  screenshots_data:
+    driver: local

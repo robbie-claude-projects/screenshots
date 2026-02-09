@@ -25,6 +25,17 @@
             placeholder="https://example.com&#10;https://another-site.com"
             required
           ></textarea>
+          <p class="keyboard-hint">Tip: Press Ctrl+Enter to submit</p>
+        </section>
+
+        <section class="form-section">
+          <h2>Viewport Size</h2>
+          <p class="help-text">Select the screen size for screenshot capture</p>
+          <select name="viewport" id="viewport" class="viewport-select">
+            <option value="desktop">Desktop (1920x1080)</option>
+            <option value="laptop">Laptop (1366x768)</option>
+            <option value="mobile">Mobile (375x667)</option>
+          </select>
         </section>
 
         <section class="form-section">
@@ -81,6 +92,69 @@
               </select>
             </div>
           </div>
+        </section>
+
+        <section class="form-section">
+          <h2>Video Ad Creatives</h2>
+          <p class="help-text">Enter URLs to your video ad thumbnails (will display with play button overlay)</p>
+
+          <div class="ad-input-group">
+            <label for="video-ad-1">Video Ad Thumbnail URL (Optional)</label>
+            <div class="input-row">
+              <input
+                type="url"
+                id="video-ad-1"
+                name="videoAds[]"
+                placeholder="https://example.com/video-thumbnail.jpg"
+              >
+            </div>
+          </div>
+
+          <div class="ad-input-group">
+            <label for="video-ad-2">Video Ad Thumbnail URL (Optional)</label>
+            <div class="input-row">
+              <input
+                type="url"
+                id="video-ad-2"
+                name="videoAds[]"
+                placeholder="https://example.com/video-thumbnail-2.jpg"
+              >
+            </div>
+          </div>
+        </section>
+
+        <section class="form-section advanced-section">
+          <details class="advanced-options">
+            <summary>Advanced Options</summary>
+            <div class="advanced-content">
+              <div class="checkbox-group">
+                <input type="checkbox" id="manual-selectors" name="useCustomSelectors">
+                <label for="manual-selectors">Use custom CSS selectors (skip auto-detection)</label>
+              </div>
+
+              <div id="custom-selectors-group" class="selector-input-group hidden">
+                <label for="custom-selectors">Custom CSS Selectors</label>
+                <p class="help-text">
+                  Enter CSS selectors for ad placements (one per line). The tool will inject your ad creatives into these elements.
+                </p>
+                <textarea
+                  id="custom-selectors"
+                  name="customSelectors"
+                  rows="4"
+                  placeholder="#sidebar .ad-slot&#10;.header-banner&#10;[data-ad-unit='leaderboard']"
+                ></textarea>
+                <div class="selector-help">
+                  <strong>Selector format examples:</strong>
+                  <ul>
+                    <li><code>#ad-container</code> - Element with ID "ad-container"</li>
+                    <li><code>.advertisement</code> - Elements with class "advertisement"</li>
+                    <li><code>[data-ad-slot]</code> - Elements with data-ad-slot attribute</li>
+                    <li><code>iframe[src*="ads"]</code> - Iframes with "ads" in src</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+          </details>
         </section>
 
         <section class="form-section">
