@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 import fs from 'fs/promises';
 import { captureScreenshot } from '../services/puppeteerService.js';
 import { detectAds } from '../services/adDetection.js';
+import { processAdReplacement } from '../services/adReplacement.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -39,7 +40,7 @@ const generateFilename = () => {
 
 // POST /api/screenshot
 router.post('/', async (req, res) => {
-  const { url } = req.body;
+  const { url, adCreatives = [] } = req.body;
 
   // Validate URL
   if (!url) {
@@ -58,6 +59,11 @@ router.post('/', async (req, res) => {
     });
   }
 
+  // Validate ad creatives if provided
+  const validAdCreatives = adCreatives.filter(ad =>
+    ad && ad.url && ad.url.trim() !== '' && ad.size
+  );
+
   try {
     await ensureScreenshotsDir();
 
@@ -65,11 +71,18 @@ router.post('/', async (req, res) => {
     const outputPath = path.join(SCREENSHOTS_DIR, filename);
 
     console.log(`Capturing screenshot of: ${url}`);
+    if (validAdCreatives.length > 0) {
+      console.log(`With ${validAdCreatives.length} ad creative(s) to replace`);
+    }
 
-    // Ad detection callback (uses both iframe and CSS methods)
+    // Ad detection and replacement callback
     let detectedAds = [];
+    let replacementResults = null;
+
     const beforeCapture = async (page) => {
+      // Detect ads on page
       detectedAds = await detectAds(page);
+
       if (detectedAds.length > 0) {
         const iframeCount = detectedAds.filter(ad => ad.type === 'iframe').length;
         const cssCount = detectedAds.filter(ad => ad.type === 'css').length;
@@ -77,22 +90,41 @@ router.post('/', async (req, res) => {
         detectedAds.forEach((ad, index) => {
           console.log(`  ${index + 1}. ${ad.sizeString} (${ad.iabSize || 'non-standard'}) - ${ad.type}`);
         });
+
+        // Replace ads if client ads were provided
+        if (validAdCreatives.length > 0) {
+          console.log('Processing ad replacement...');
+          replacementResults = await processAdReplacement(page, detectedAds, validAdCreatives);
+          console.log(`Replacement complete: ${replacementResults.successful.length} successful, ${replacementResults.failed.length} failed`);
+        }
       } else {
         console.log('No ad placements detected');
       }
-      return detectedAds;
+
+      return { detectedAds, replacementResults };
     };
 
     const result = await captureScreenshot(url, outputPath, { beforeCapture });
 
     console.log(`Screenshot saved: ${filename}`);
 
-    res.json({
+    const response = {
       success: true,
       filename,
       message: 'Screenshot captured successfully',
-      detectedAds: result.callbackResult || []
-    });
+      detectedAds: result.callbackResult?.detectedAds || []
+    };
+
+    // Include replacement results if ads were replaced
+    if (result.callbackResult?.replacementResults) {
+      response.adReplacement = {
+        successful: result.callbackResult.replacementResults.successful.length,
+        failed: result.callbackResult.replacementResults.failed.length,
+        details: result.callbackResult.replacementResults
+      };
+    }
+
+    res.json(response);
   } catch (error) {
     console.error(`Screenshot capture failed for ${url}:`, error.message);
 
