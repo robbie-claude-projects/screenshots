@@ -156,22 +156,25 @@ router.post('/', async (req, res) => {
     let detectedAds = [];
     let replacementResults = null;
 
-    const beforeCapture = async (page) => {
-      // Use custom selectors or auto-detect
+    const beforeCapture = async (page, currentViewport) => {
+      // Use custom selectors or auto-detect (only visible in viewport)
       if (useCustomSelectors) {
         console.log('Using custom selectors (skipping auto-detection)');
         detectedAds = await customSelectorsToplacements(page, validCustomSelectors);
         console.log(`Found ${detectedAds.length} element(s) matching custom selectors`);
       } else {
-        // Detect ads on page
-        detectedAds = await detectAds(page);
+        // Detect ads on page (filtered to viewport-visible only)
+        detectedAds = await detectAds(page, {
+          viewport: currentViewport,
+          viewportOnly: true
+        });
       }
 
       if (detectedAds.length > 0) {
         if (!useCustomSelectors) {
           const iframeCount = detectedAds.filter(ad => ad.type === 'iframe').length;
           const cssCount = detectedAds.filter(ad => ad.type === 'css').length;
-          console.log(`Detected ${detectedAds.length} ad placement(s): ${iframeCount} iframe, ${cssCount} CSS`);
+          console.log(`Detected ${detectedAds.length} ad placement(s) in viewport: ${iframeCount} iframe, ${cssCount} CSS`);
         }
         detectedAds.forEach((ad, index) => {
           console.log(`  ${index + 1}. ${ad.sizeString} (${ad.iabSize || ad.type}) - ${ad.type}`);
@@ -184,7 +187,7 @@ router.post('/', async (req, res) => {
           console.log(`Replacement complete: ${replacementResults.successful.length} successful, ${replacementResults.failed.length} failed`);
         }
       } else {
-        console.log(useCustomSelectors ? 'No elements matched custom selectors' : 'No ad placements detected');
+        console.log(useCustomSelectors ? 'No elements matched custom selectors' : 'No ad placements detected in viewport');
       }
 
       return { detectedAds, replacementResults };
@@ -310,15 +313,18 @@ router.post('/batch', async (req, res) => {
       const outputPath = path.join(SCREENSHOTS_DIR, filename);
 
       // Ad detection and replacement callback
-      const beforeCapture = async (page) => {
+      const beforeCapture = async (page, currentViewport) => {
         let detectedAds = [];
         let replacementResults = null;
 
-        // Use custom selectors or auto-detect
+        // Use custom selectors or auto-detect (only visible in viewport)
         if (useCustomSelectors) {
           detectedAds = await customSelectorsToplacements(page, validCustomSelectors);
         } else {
-          detectedAds = await detectAds(page);
+          detectedAds = await detectAds(page, {
+            viewport: currentViewport,
+            viewportOnly: true
+          });
         }
 
         if (detectedAds.length > 0 && validAdCreatives.length > 0) {

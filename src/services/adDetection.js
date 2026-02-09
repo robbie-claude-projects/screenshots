@@ -495,14 +495,69 @@ export const detectCSSAds = async (page) => {
 };
 
 /**
+ * Check if an element is within the viewport bounds
+ * @param {object} elementBounds - Object with top, bottom, left, right properties
+ * @param {object} viewport - Object with width and height properties
+ * @returns {boolean} - True if element is at least partially visible in viewport
+ */
+const isInViewport = (elementBounds, viewport) => {
+  const { top, bottom, left, right } = elementBounds;
+  const viewportHeight = viewport.height;
+  const viewportWidth = viewport.width;
+
+  // Check if element is at least partially visible in the viewport
+  const isVerticallyVisible = top < viewportHeight && bottom > 0;
+  const isHorizontallyVisible = left < viewportWidth && right > 0;
+
+  return isVerticallyVisible && isHorizontallyVisible;
+};
+
+/**
+ * Filter ads to only include those visible in the viewport
+ * @param {object} page - Puppeteer page object
+ * @param {Array} ads - Array of detected ad placements
+ * @param {object} viewport - Viewport dimensions { width, height }
+ * @returns {Promise<Array>} - Filtered array of visible ad placements
+ */
+export const filterAdsByViewport = async (page, ads, viewport) => {
+  if (!viewport || !ads.length) return ads;
+
+  const visibleAds = await page.evaluate((adsData, viewportDimensions) => {
+    return adsData.filter(ad => {
+      try {
+        const element = document.querySelector(ad.selector);
+        if (!element) return false;
+
+        const rect = element.getBoundingClientRect();
+
+        // Check if element is at least partially visible in the viewport
+        const isVerticallyVisible = rect.top < viewportDimensions.height && rect.bottom > 0;
+        const isHorizontallyVisible = rect.left < viewportDimensions.width && rect.right > 0;
+
+        // Also verify the element has actual dimensions
+        const hasSize = rect.width > 0 && rect.height > 0;
+
+        return isVerticallyVisible && isHorizontallyVisible && hasSize;
+      } catch {
+        return false;
+      }
+    });
+  }, ads, viewport);
+
+  return visibleAds;
+};
+
+/**
  * Detect all ad placements using iframe, CSS, and video methods
  * @param {object} page - Puppeteer page object
  * @param {object} options - Detection options
  * @param {boolean} options.includeVideo - Whether to include video placements (default: true)
+ * @param {object} options.viewport - Viewport dimensions to filter visible ads (optional)
+ * @param {boolean} options.viewportOnly - Only return ads visible in viewport (default: true)
  * @returns {Promise<Array>} - Combined array of detected ad placements
  */
 export const detectAds = async (page, options = {}) => {
-  const { includeVideo = true } = options;
+  const { includeVideo = true, viewport = null, viewportOnly = true } = options;
 
   const detectionPromises = [
     detectIframeAds(page),
@@ -538,6 +593,13 @@ export const detectAds = async (page, options = {}) => {
       existingPositions.add(key);
     }
   });
+
+  // Filter to viewport-visible ads if requested
+  if (viewportOnly && viewport) {
+    const visibleAds = await filterAdsByViewport(page, allAds, viewport);
+    console.log(`Found ${allAds.length} total ads, ${visibleAds.length} visible in viewport`);
+    return visibleAds;
+  }
 
   return allAds;
 };
@@ -583,6 +645,7 @@ export default {
   detectIframeAds,
   detectCSSAds,
   detectVideoAds,
+  filterAdsByViewport,
   isAdServerUrl,
   isAdRelatedName,
   isVideoPlayerUrl,
