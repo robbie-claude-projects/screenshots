@@ -415,6 +415,332 @@ const dismissCookieConsent = async (page) => {
   }
 };
 
+// ============================================================================
+// POPUP/MODAL DISMISSAL - Subscription, Newsletter, Marketing Overlays
+// ============================================================================
+
+// Common popup/modal close button selectors
+const POPUP_CLOSE_SELECTORS = [
+  // Close buttons (X icons)
+  '[aria-label="Close"]',
+  '[aria-label="close"]',
+  '[aria-label="Close modal"]',
+  '[aria-label="Dismiss"]',
+  'button.close',
+  'button.close-btn',
+  'button.close-button',
+  'button[class*="close"]',
+  'a.close',
+  '.modal-close',
+  '.modal__close',
+  '.popup-close',
+  '.popup__close',
+  '.overlay-close',
+  '[data-dismiss="modal"]',
+  '[data-action="close"]',
+  '[data-close]',
+  '[data-testid="close-button"]',
+  '[data-testid="modal-close"]',
+
+  // Specific sites
+  '.pn-Modal__close', // Piano
+  '.tp-close', // Third-party modals
+  '.newsletter-close',
+  '.subscribe-close',
+  '.paywall-close',
+
+  // SVG close icons inside buttons
+  'button svg[class*="close"]',
+  'button:has(svg[viewBox="0 0 24 24"])', // Common icon size
+
+  // Generic X buttons
+  'button:has(span:only-child)',
+];
+
+// Text patterns for popup close/dismiss buttons
+const POPUP_CLOSE_TEXT_PATTERNS = [
+  /^×$/,  // × character
+  /^✕$/,  // ✕ character
+  /^x$/i,
+  /^close$/i,
+  /^dismiss$/i,
+  /^no\s*thanks?$/i,
+  /^not\s*now$/i,
+  /^maybe\s*later$/i,
+  /^skip$/i,
+  /^cancel$/i,
+  /^continue\s*(to\s*)?(site|reading|article)?$/i,
+  /^i('?m)?\s*not\s*interested$/i,
+  /^no,?\s*thanks?$/i,
+  /^remind\s*me\s*later$/i,
+];
+
+// Selectors for popup/modal containers to remove
+const POPUP_CONTAINER_SELECTORS = [
+  // Generic modal patterns
+  '.modal[aria-modal="true"]',
+  '[role="dialog"]',
+  '.modal-overlay',
+  '.modal-backdrop',
+  '.overlay',
+  '.popup-overlay',
+
+  // Subscription/Newsletter specific
+  '[class*="subscribe-modal"]',
+  '[class*="subscription-modal"]',
+  '[class*="newsletter-modal"]',
+  '[class*="paywall"]',
+  '[class*="regwall"]',
+  '[id*="subscribe-modal"]',
+  '[id*="newsletter-modal"]',
+
+  // Premium/Registration walls
+  '[class*="premium-modal"]',
+  '[class*="register-modal"]',
+  '[class*="signup-modal"]',
+  '[class*="login-modal"]',
+
+  // Piano (common paywall provider)
+  '.tp-modal',
+  '.tp-iframe-wrapper',
+  '#tp-global-wrapper',
+  '[id^="offer-"]',
+
+  // Specific site patterns
+  '.pn-Modal__overlay', // Piano
+  '.c-Modal', // Generic component
+  '[class*="InlineSubscribe"]',
+  '[class*="StickySubscribe"]',
+
+  // Backdrop/overlay patterns
+  '.backdrop',
+  '[class*="backdrop"]',
+  '[class*="overlay"]:not(video):not(.ad)',
+];
+
+// Try to click popup close buttons
+const tryClosePopup = async (page) => {
+  try {
+    // Strategy 1: Click close buttons by selector
+    for (const selector of POPUP_CLOSE_SELECTORS) {
+      try {
+        const buttons = await page.$$(selector);
+        for (const button of buttons) {
+          const isVisible = await page.evaluate((el) => {
+            const rect = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+            // Check if in viewport and visible
+            return rect.width > 0 &&
+                   rect.height > 0 &&
+                   rect.top >= 0 &&
+                   rect.top < window.innerHeight &&
+                   style.visibility !== 'hidden' &&
+                   style.display !== 'none' &&
+                   style.opacity !== '0';
+          }, button);
+
+          if (isVisible) {
+            await button.click();
+            console.log(`Popup closed using selector: ${selector}`);
+            return true;
+          }
+        }
+      } catch {
+        // Selector didn't match or click failed
+      }
+    }
+
+    // Strategy 2: Find close buttons by text content
+    const closedByText = await page.evaluate((patterns) => {
+      // Look for buttons/links with close-related text
+      const candidates = document.querySelectorAll(
+        'button, a, span[onclick], div[onclick], [role="button"]'
+      );
+
+      for (const el of candidates) {
+        const text = (el.innerText || el.textContent || '').trim();
+        const ariaLabel = el.getAttribute('aria-label') || '';
+
+        // Check text content
+        for (const patternObj of patterns) {
+          const pattern = new RegExp(patternObj.source, patternObj.flags);
+          if (pattern.test(text) || pattern.test(ariaLabel)) {
+            const rect = el.getBoundingClientRect();
+            const style = window.getComputedStyle(el);
+
+            if (rect.width > 0 && rect.height > 0 &&
+                rect.top >= 0 && rect.top < window.innerHeight &&
+                style.visibility !== 'hidden' &&
+                style.display !== 'none') {
+              el.click();
+              return text || ariaLabel;
+            }
+          }
+        }
+      }
+
+      // Strategy 3: Look for X close icons in modal headers
+      const modals = document.querySelectorAll('[role="dialog"], .modal, [class*="modal"], [class*="popup"]');
+      for (const modal of modals) {
+        const rect = modal.getBoundingClientRect();
+        if (rect.width === 0 || rect.height === 0) continue;
+
+        // Find close buttons in top-right area of modal
+        const closeBtn = modal.querySelector(
+          'button:first-child, button:last-child, [class*="close"], [aria-label*="close" i], [aria-label*="Close"]'
+        );
+        if (closeBtn) {
+          const btnRect = closeBtn.getBoundingClientRect();
+          // Check if button is in top-right quadrant of modal
+          if (btnRect.right >= rect.right - 100 && btnRect.top <= rect.top + 100) {
+            closeBtn.click();
+            return 'close button in modal header';
+          }
+        }
+      }
+
+      return null;
+    }, POPUP_CLOSE_TEXT_PATTERNS.map(p => ({ source: p.source, flags: p.flags })));
+
+    if (closedByText) {
+      console.log(`Popup closed using text match: "${closedByText}"`);
+      return true;
+    }
+
+    return false;
+  } catch (error) {
+    console.warn('Error trying to close popup:', error.message);
+    return false;
+  }
+};
+
+// Remove popup elements from DOM
+const removePopupElements = async (page) => {
+  try {
+    const result = await page.evaluate((selectors) => {
+      let removedCount = 0;
+      const removedTypes = [];
+
+      // Remove popup containers
+      for (const selector of selectors) {
+        try {
+          const elements = document.querySelectorAll(selector);
+          elements.forEach(el => {
+            // Don't remove elements that are part of the main content
+            const isMainContent = el.closest('article, main, .content, #content');
+            if (!isMainContent && el.parentElement) {
+              el.remove();
+              removedCount++;
+            }
+          });
+        } catch {
+          // Invalid selector
+        }
+      }
+
+      // Remove fixed/sticky overlays that cover the page
+      const allElements = document.querySelectorAll('*');
+      for (const el of allElements) {
+        const style = window.getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+
+        // Check for full-screen overlays
+        if ((style.position === 'fixed' || style.position === 'absolute') &&
+            rect.width >= window.innerWidth * 0.5 &&
+            rect.height >= window.innerHeight * 0.5 &&
+            style.zIndex && parseInt(style.zIndex) > 1000) {
+
+          // Check if it looks like a modal/overlay (has backdrop or high z-index)
+          const hasBackdrop = style.backgroundColor.includes('rgba') ||
+                             parseFloat(style.opacity) < 1 ||
+                             el.classList.toString().includes('modal') ||
+                             el.classList.toString().includes('overlay') ||
+                             el.classList.toString().includes('backdrop');
+
+          // Don't remove video players or ad containers
+          const isMedia = el.tagName === 'VIDEO' ||
+                         el.querySelector('video') ||
+                         el.classList.toString().includes('ad') ||
+                         el.classList.toString().includes('player');
+
+          if (hasBackdrop && !isMedia) {
+            el.remove();
+            removedCount++;
+            removedTypes.push('full-screen overlay');
+          }
+        }
+      }
+
+      // Remove body scroll lock
+      document.body.style.overflow = '';
+      document.body.style.position = '';
+      document.body.style.top = '';
+      document.body.style.width = '';
+      document.body.style.height = '';
+      document.documentElement.style.overflow = '';
+
+      // Remove common modal-open classes
+      document.body.classList.remove(
+        'modal-open',
+        'has-modal',
+        'no-scroll',
+        'overflow-hidden',
+        'modal-active',
+        'popup-open'
+      );
+
+      return { removedCount, removedTypes };
+    }, POPUP_CONTAINER_SELECTORS);
+
+    if (result.removedCount > 0) {
+      console.log(`Removed ${result.removedCount} popup elements`);
+    }
+    return result.removedCount;
+  } catch (error) {
+    console.warn('Error removing popup elements:', error.message);
+    return 0;
+  }
+};
+
+// Main popup dismissal function
+const dismissPopups = async (page) => {
+  let dismissed = false;
+
+  try {
+    // Try clicking close buttons first
+    dismissed = await tryClosePopup(page);
+
+    if (dismissed) {
+      await delay(500); // Wait for animation
+    }
+
+    // Try again after a short delay (some popups appear late)
+    if (!dismissed) {
+      await delay(1000);
+      dismissed = await tryClosePopup(page);
+      if (dismissed) {
+        await delay(500);
+      }
+    }
+
+    // Always try to remove remaining popup elements
+    await removePopupElements(page);
+
+    // Press Escape key as fallback (closes many modals)
+    try {
+      await page.keyboard.press('Escape');
+      await delay(300);
+    } catch {
+      // Ignore keyboard errors
+    }
+
+    return dismissed;
+  } catch (error) {
+    console.warn('Error during popup dismissal:', error.message);
+    return false;
+  }
+};
+
 // Navigate to URL with retry logic
 const navigateWithRetry = async (page, url, maxRetries = 1, retryDelayMs = 5000) => {
   let lastError = null;
@@ -496,7 +822,10 @@ export const captureScreenshot = async (url, outputPath, options = {}) => {
     // Attempt to dismiss cookie consent banners
     await dismissCookieConsent(page);
 
-    // Wait for page to stabilize after cookie dismissal
+    // Attempt to dismiss popups (subscription, newsletter, etc.)
+    await dismissPopups(page);
+
+    // Wait for page to stabilize after dismissals
     await delay(2000);
 
     // Run beforeCapture callback if provided (for ad detection/replacement)
@@ -508,7 +837,8 @@ export const captureScreenshot = async (url, outputPath, options = {}) => {
     // Wait for ad replacements to render
     await delay(2000);
 
-    // Final cleanup - only remove specific known CMP containers
+    // Final cleanup - remove any remaining popups and cookie banners
+    await removePopupElements(page);
     await removeCookieBannerElements(page);
 
     await page.screenshot({
