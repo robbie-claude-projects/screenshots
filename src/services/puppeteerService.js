@@ -86,48 +86,6 @@ const isRetryableError = (error) => {
 // Delay helper
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-// CSS to hide ONLY specific known cookie consent banners (not generic patterns)
-// This is applied AFTER consent is dismissed, not before
-const COOKIE_BANNER_HIDE_CSS = `
-  /* OneTrust - specific containers only */
-  #onetrust-consent-sdk,
-  #onetrust-banner-sdk,
-  .onetrust-pc-dark-filter,
-
-  /* Cookiebot - specific containers only */
-  #CybotCookiebotDialog,
-  #CybotCookiebotDialogBodyUnderlay,
-
-  /* TrustArc */
-  .truste_overlay,
-  .truste_box_overlay,
-  #truste-consent-track,
-
-  /* Quantcast */
-  .qc-cmp2-container,
-  #qc-cmp2-container,
-
-  /* Sourcepoint - specific container */
-  div[id^="sp_message_container"],
-
-  /* Didomi */
-  #didomi-host,
-
-  /* Cookie Control */
-  #ccc,
-  #ccc-overlay {
-    display: none !important;
-    visibility: hidden !important;
-  }
-
-  /* Remove body scroll lock */
-  body.sp-message-open,
-  body.didomi-popup-open,
-  body.ccc-open {
-    overflow: auto !important;
-    position: static !important;
-  }
-`;
 
 // Common cookie consent button selectors - ordered by priority
 const COOKIE_CONSENT_SELECTORS = [
@@ -187,19 +145,8 @@ const ACCEPT_TEXT_PATTERNS = [
   /^close$/i,
 ];
 
-// Inject CSS to hide cookie banners
-const injectCookieBannerHideCSS = async (page) => {
-  try {
-    await page.addStyleTag({ content: COOKIE_BANNER_HIDE_CSS });
-    console.log('Injected CSS to hide cookie banners');
-    return true;
-  } catch (error) {
-    console.warn('Failed to inject cookie banner CSS:', error.message);
-    return false;
-  }
-};
-
-// Remove cookie banner elements from DOM - only specific known CMP containers
+// Clean up cookie banner elements from DOM AFTER consent has been successfully accepted
+// This removes any lingering banner elements that didn't dismiss themselves - only specific known CMP containers
 const removeCookieBannerElements = async (page) => {
   try {
     const removedCount = await page.evaluate(() => {
@@ -411,10 +358,9 @@ const dismissCookieConsent = async (page) => {
       }
     }
 
-    // Step 5: ONLY after attempting to dismiss, inject CSS and remove elements
-    // This ensures we don't hide buttons we need to click
+    // Step 5: ONLY after successfully clicking accept, clean up any lingering banner elements
+    // We don't hide banners that weren't accepted - that would break page interactivity
     if (dismissed) {
-      await injectCookieBannerHideCSS(page);
       await removeCookieBannerElements(page);
     }
 
@@ -1256,9 +1202,8 @@ export const captureScreenshot = async (url, outputPath, options = {}) => {
     // Quick check for any newly added images after ad replacement
     await waitForViewportImagesToLoad(page, 5000);
 
-    // Final cleanup - remove any remaining popups and cookie banners
+    // Final cleanup - remove any remaining popups (not cookie banners - those need to be accepted, not hidden)
     await removePopupElements(page);
-    await removeCookieBannerElements(page);
 
     // Final brief pause to ensure all rendering is complete
     await delay(500);
@@ -1274,14 +1219,13 @@ export const captureScreenshot = async (url, outputPath, options = {}) => {
   }
 };
 
-export { dismissCookieConsent, removeCookieBannerElements };
+export { dismissCookieConsent };
 
 export default {
   getBrowser,
   closeBrowser,
   captureScreenshot,
   dismissCookieConsent,
-  removeCookieBannerElements,
   VIEWPORT_PRESETS,
   getViewport
 };
