@@ -203,6 +203,11 @@ const injectCookieBannerHideCSS = async (page) => {
 const removeCookieBannerElements = async (page) => {
   try {
     const removedCount = await page.evaluate(() => {
+      // Safety check
+      if (!document.body) {
+        return 0;
+      }
+
       let count = 0;
       // Only remove specific known CMP containers - NOT generic patterns
       const selectorsToRemove = [
@@ -236,15 +241,20 @@ const removeCookieBannerElements = async (page) => {
         count++;
       });
 
-      // Remove body classes that lock scrolling
-      document.body.classList.remove(
-        'sp-message-open',
-        'didomi-popup-open',
-        'ccc-open'
-      );
-      document.body.style.overflow = '';
-      document.body.style.position = '';
-      document.documentElement.style.overflow = '';
+      // Remove body classes that lock scrolling (with null checks)
+      if (document.body) {
+        document.body.classList.remove(
+          'sp-message-open',
+          'didomi-popup-open',
+          'ccc-open'
+        );
+        document.body.style.overflow = '';
+        document.body.style.position = '';
+      }
+
+      if (document.documentElement) {
+        document.documentElement.style.overflow = '';
+      }
 
       return count;
     });
@@ -420,41 +430,44 @@ const dismissCookieConsent = async (page) => {
 // ============================================================================
 
 // Common popup/modal close button selectors
+// IMPORTANT: These must be specific to actual popups, not generic UI elements
 const POPUP_CLOSE_SELECTORS = [
-  // Close buttons (X icons)
-  '[aria-label="Close"]',
-  '[aria-label="close"]',
+  // Close buttons with explicit close-related attributes
   '[aria-label="Close modal"]',
+  '[aria-label="Close dialog"]',
   '[aria-label="Dismiss"]',
-  'button.close',
-  'button.close-btn',
-  'button.close-button',
-  'button[class*="close"]',
-  'a.close',
+  '[data-dismiss="modal"]',
+  '[data-action="close"]',
+  '[data-testid="close-button"]',
+  '[data-testid="modal-close"]',
+
+  // Close buttons inside modal/popup containers only
+  '.modal [aria-label="Close"]',
+  '.modal [aria-label="close"]',
+  '.modal button.close',
+  '.modal .close-btn',
+  '[role="dialog"] [aria-label="Close"]',
+  '[role="dialog"] [aria-label="close"]',
+  '[role="dialog"] button.close',
+
+  // Specific modal close classes
   '.modal-close',
   '.modal__close',
   '.popup-close',
   '.popup__close',
   '.overlay-close',
-  '[data-dismiss="modal"]',
-  '[data-action="close"]',
-  '[data-close]',
-  '[data-testid="close-button"]',
-  '[data-testid="modal-close"]',
 
-  // Specific sites
+  // Specific paywall/subscription providers
   '.pn-Modal__close', // Piano
   '.tp-close', // Third-party modals
   '.newsletter-close',
   '.subscribe-close',
   '.paywall-close',
 
-  // SVG close icons inside buttons
-  'button svg[class*="close"]',
-  'button:has(svg[viewBox="0 0 24 24"])', // Common icon size
-
-  // Generic X buttons
-  'button:has(span:only-child)',
+  // Conde Nast specific (New Yorker, Wired, etc.)
+  '[class*="PaywallModal"] button[class*="close"]',
+  '[class*="SubscribeModal"] button[class*="close"]',
+  '[class*="NewsletterModal"] button[class*="close"]',
 ];
 
 // Text patterns for popup close/dismiss buttons
@@ -476,20 +489,19 @@ const POPUP_CLOSE_TEXT_PATTERNS = [
 ];
 
 // Selectors for popup/modal containers to remove
+// IMPORTANT: Be conservative - only remove elements that are clearly popups
 const POPUP_CONTAINER_SELECTORS = [
-  // Generic modal patterns
+  // Specific modal patterns (not generic [role="dialog"] which can be legitimate UI)
   '.modal[aria-modal="true"]',
-  '[role="dialog"]',
   '.modal-overlay',
   '.modal-backdrop',
-  '.overlay',
   '.popup-overlay',
 
   // Subscription/Newsletter specific
   '[class*="subscribe-modal"]',
   '[class*="subscription-modal"]',
   '[class*="newsletter-modal"]',
-  '[class*="paywall"]',
+  '[class*="paywall-modal"]',
   '[class*="regwall"]',
   '[id*="subscribe-modal"]',
   '[id*="newsletter-modal"]',
@@ -498,24 +510,19 @@ const POPUP_CONTAINER_SELECTORS = [
   '[class*="premium-modal"]',
   '[class*="register-modal"]',
   '[class*="signup-modal"]',
-  '[class*="login-modal"]',
 
   // Piano (common paywall provider)
   '.tp-modal',
   '.tp-iframe-wrapper',
   '#tp-global-wrapper',
-  '[id^="offer-"]',
 
   // Specific site patterns
   '.pn-Modal__overlay', // Piano
-  '.c-Modal', // Generic component
   '[class*="InlineSubscribe"]',
   '[class*="StickySubscribe"]',
-
-  // Backdrop/overlay patterns
-  '.backdrop',
-  '[class*="backdrop"]',
-  '[class*="overlay"]:not(video):not(.ad)',
+  '[class*="PaywallModal"]',
+  '[class*="SubscribeModal"]',
+  '[class*="NewsletterModal"]',
 ];
 
 // Try to click popup close buttons
@@ -550,49 +557,55 @@ const tryClosePopup = async (page) => {
       }
     }
 
-    // Strategy 2: Find close buttons by text content
+    // Strategy 2: Find close buttons by text content - ONLY inside modal/popup containers
     const closedByText = await page.evaluate((patterns) => {
-      // Look for buttons/links with close-related text
-      const candidates = document.querySelectorAll(
-        'button, a, span[onclick], div[onclick], [role="button"]'
+      // Only look for buttons inside modal/popup containers, NOT the whole page
+      const modalContainers = document.querySelectorAll(
+        '.modal, [role="dialog"], [class*="modal"], [class*="popup"], [class*="Modal"], [class*="Popup"], ' +
+        '[class*="paywall"], [class*="Paywall"], [class*="subscribe"], [class*="Subscribe"], ' +
+        '[class*="newsletter"], [class*="Newsletter"]'
       );
 
-      for (const el of candidates) {
-        const text = (el.innerText || el.textContent || '').trim();
-        const ariaLabel = el.getAttribute('aria-label') || '';
+      for (const modal of modalContainers) {
+        const modalRect = modal.getBoundingClientRect();
+        // Skip invisible modals
+        if (modalRect.width === 0 || modalRect.height === 0) continue;
 
-        // Check text content
-        for (const patternObj of patterns) {
-          const pattern = new RegExp(patternObj.source, patternObj.flags);
-          if (pattern.test(text) || pattern.test(ariaLabel)) {
-            const rect = el.getBoundingClientRect();
-            const style = window.getComputedStyle(el);
+        // Look for buttons inside this modal
+        const candidates = modal.querySelectorAll(
+          'button, a, span[onclick], div[onclick], [role="button"]'
+        );
 
-            if (rect.width > 0 && rect.height > 0 &&
-                rect.top >= 0 && rect.top < window.innerHeight &&
-                style.visibility !== 'hidden' &&
-                style.display !== 'none') {
-              el.click();
-              return text || ariaLabel;
+        for (const el of candidates) {
+          const text = (el.innerText || el.textContent || '').trim();
+          const ariaLabel = el.getAttribute('aria-label') || '';
+
+          // Check text content
+          for (const patternObj of patterns) {
+            const pattern = new RegExp(patternObj.source, patternObj.flags);
+            if (pattern.test(text) || pattern.test(ariaLabel)) {
+              const rect = el.getBoundingClientRect();
+              const style = window.getComputedStyle(el);
+
+              if (rect.width > 0 && rect.height > 0 &&
+                  rect.top >= 0 && rect.top < window.innerHeight &&
+                  style.visibility !== 'hidden' &&
+                  style.display !== 'none') {
+                el.click();
+                return text || ariaLabel;
+              }
             }
           }
         }
-      }
 
-      // Strategy 3: Look for X close icons in modal headers
-      const modals = document.querySelectorAll('[role="dialog"], .modal, [class*="modal"], [class*="popup"]');
-      for (const modal of modals) {
-        const rect = modal.getBoundingClientRect();
-        if (rect.width === 0 || rect.height === 0) continue;
-
-        // Find close buttons in top-right area of modal
+        // Also try to find close buttons in top-right area of modal
         const closeBtn = modal.querySelector(
-          'button:first-child, button:last-child, [class*="close"], [aria-label*="close" i], [aria-label*="Close"]'
+          '[class*="close"], [aria-label*="close" i], [aria-label*="Close"]'
         );
         if (closeBtn) {
           const btnRect = closeBtn.getBoundingClientRect();
           // Check if button is in top-right quadrant of modal
-          if (btnRect.right >= rect.right - 100 && btnRect.top <= rect.top + 100) {
+          if (btnRect.right >= modalRect.right - 100 && btnRect.top <= modalRect.top + 100) {
             closeBtn.click();
             return 'close button in modal header';
           }
@@ -615,81 +628,64 @@ const tryClosePopup = async (page) => {
 };
 
 // Remove popup elements from DOM
+// IMPORTANT: Be conservative - only remove elements that are clearly popups
 const removePopupElements = async (page) => {
   try {
     const result = await page.evaluate((selectors) => {
       let removedCount = 0;
-      const removedTypes = [];
 
-      // Remove popup containers
+      // Safety check - ensure body exists
+      if (!document.body) {
+        return { removedCount: 0, error: 'document.body is null' };
+      }
+
+      // Remove popup containers - only specific selectors, not aggressive detection
       for (const selector of selectors) {
         try {
           const elements = document.querySelectorAll(selector);
           elements.forEach(el => {
             // Don't remove elements that are part of the main content
-            const isMainContent = el.closest('article, main, .content, #content');
-            if (!isMainContent && el.parentElement) {
+            const isMainContent = el.closest('article, main, .content, #content, nav, header, footer');
+            // Don't remove the body or its direct wrapper
+            const isBodyOrWrapper = el === document.body || el === document.documentElement;
+
+            if (!isMainContent && !isBodyOrWrapper && el.parentElement) {
               el.remove();
               removedCount++;
             }
           });
         } catch {
-          // Invalid selector
+          // Invalid selector, skip
         }
       }
 
-      // Remove fixed/sticky overlays that cover the page
-      const allElements = document.querySelectorAll('*');
-      for (const el of allElements) {
-        const style = window.getComputedStyle(el);
-        const rect = el.getBoundingClientRect();
+      // NOTE: Removed aggressive "full-screen overlay" detection as it was
+      // removing main page content on sites like newyorker.com and wired.co.uk
 
-        // Check for full-screen overlays
-        if ((style.position === 'fixed' || style.position === 'absolute') &&
-            rect.width >= window.innerWidth * 0.5 &&
-            rect.height >= window.innerHeight * 0.5 &&
-            style.zIndex && parseInt(style.zIndex) > 1000) {
+      // Remove body scroll lock (with null checks)
+      if (document.body) {
+        document.body.style.overflow = '';
+        document.body.style.position = '';
+        document.body.style.top = '';
+        document.body.style.width = '';
+        document.body.style.height = '';
 
-          // Check if it looks like a modal/overlay (has backdrop or high z-index)
-          const hasBackdrop = style.backgroundColor.includes('rgba') ||
-                             parseFloat(style.opacity) < 1 ||
-                             el.classList.toString().includes('modal') ||
-                             el.classList.toString().includes('overlay') ||
-                             el.classList.toString().includes('backdrop');
-
-          // Don't remove video players or ad containers
-          const isMedia = el.tagName === 'VIDEO' ||
-                         el.querySelector('video') ||
-                         el.classList.toString().includes('ad') ||
-                         el.classList.toString().includes('player');
-
-          if (hasBackdrop && !isMedia) {
-            el.remove();
-            removedCount++;
-            removedTypes.push('full-screen overlay');
-          }
-        }
+        // Remove common modal-open classes
+        document.body.classList.remove(
+          'modal-open',
+          'has-modal',
+          'no-scroll',
+          'overflow-hidden',
+          'modal-active',
+          'popup-open'
+        );
       }
 
-      // Remove body scroll lock
-      document.body.style.overflow = '';
-      document.body.style.position = '';
-      document.body.style.top = '';
-      document.body.style.width = '';
-      document.body.style.height = '';
-      document.documentElement.style.overflow = '';
+      if (document.documentElement) {
+        document.documentElement.style.overflow = '';
+      }
 
-      // Remove common modal-open classes
-      document.body.classList.remove(
-        'modal-open',
-        'has-modal',
-        'no-scroll',
-        'overflow-hidden',
-        'modal-active',
-        'popup-open'
-      );
-
-      return { removedCount, removedTypes };
+      return { removedCount };
     }, POPUP_CONTAINER_SELECTORS);
 
     if (result.removedCount > 0) {
